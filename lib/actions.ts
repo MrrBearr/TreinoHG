@@ -15,34 +15,71 @@ import type {
 } from "@/lib/constants";
 import type { AIDetectedFood } from "@/types/database";
 
+// ─── Helpers ───────────────────────────────────────────────────
+
 async function ensureUser() {
   const supabase = createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  if (!user) {
+    console.error("[actions:ensureUser] No authenticated user");
+    redirect("/login");
+  }
   return { supabase, user };
 }
 
 async function ensureDay(date: string) {
   const { supabase, user } = await ensureUser();
-  const { data: existing } = await supabase
+
+  // Try to find existing day
+  const { data: existing, error: selectErr } = await supabase
     .from("days")
     .select("id")
     .eq("user_id", user.id)
     .eq("date", date)
     .maybeSingle();
-  if (existing) return { supabase, user, day_id: existing.id as string };
-  const { data, error } = await supabase
+
+  if (selectErr) {
+    console.error("[actions:ensureDay] Select failed:", selectErr.message);
+  }
+
+  if (existing) {
+    return { supabase, user, day_id: existing.id as string };
+  }
+
+  // Create new day
+  const { data, error: insertErr } = await supabase
     .from("days")
     .insert({ user_id: user.id, date })
     .select("id")
     .single();
-  if (error) throw error;
+
+  if (insertErr) {
+    // Race condition: another request created it between select and insert
+    // Retry the select
+    console.warn("[actions:ensureDay] Insert conflict, retrying select:", insertErr.message);
+    const { data: retry } = await supabase
+      .from("days")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("date", date)
+      .maybeSingle();
+
+    if (retry) {
+      return { supabase, user, day_id: retry.id as string };
+    }
+    // Still no day — throw with clear message
+    throw new Error(
+      `Não foi possível criar o registro do dia ${date}. Verifique se o perfil está configurado.`,
+    );
+  }
+
   return { supabase, user, day_id: data!.id as string };
 }
 
-// ====================== PROFILE ======================
+// ─── PROFILE ───────────────────────────────────────────────────
+
 export async function updateProfile(formData: FormData) {
   const { supabase, user } = await ensureUser();
 
@@ -95,16 +132,35 @@ export async function updateProfile(formData: FormData) {
     fat_target_g = fat_target_g ?? t.fat_g;
   }
 
-  await supabase
+  const updateData = {
+    ...profile,
+    calorie_target,
+    protein_target_g,
+    carbs_target_g,
+    fat_target_g,
+  };
+
+  // Try update first
+  const { error: updateErr, count } = await supabase
     .from("profiles")
-    .update({
-      ...profile,
-      calorie_target,
-      protein_target_g,
-      carbs_target_g,
-      fat_target_g,
-    })
+    .update(updateData)
     .eq("user_id", user.id);
+
+  if (updateErr) {
+    console.error("[actions:updateProfile] Update failed:", updateErr.message);
+    // If update fails, try upsert (profile row might not exist yet)
+    const { error: upsertErr } = await supabase.from("profiles").upsert(
+      {
+        user_id: user.id,
+        ...updateData,
+      },
+      { onConflict: "user_id" },
+    );
+    if (upsertErr) {
+      console.error("[actions:updateProfile] Upsert also failed:", upsertErr.message);
+      throw new Error("Não foi possível salvar o perfil. Tente novamente.");
+    }
+  }
 
   revalidatePath("/profile");
   revalidatePath("/dashboard");
@@ -112,11 +168,24 @@ export async function updateProfile(formData: FormData) {
 
 export async function updateTheme(theme: "light" | "dark" | "premium") {
   const { supabase, user } = await ensureUser();
-  await supabase.from("profiles").update({ theme }).eq("user_id", user.id);
+  const { error } = await supabase
+    .from("profiles")
+    .update({ theme })
+    .eq("user_id", user.id);
+
+  if (error) {
+    console.error("[actions:updateTheme] Failed:", error.message);
+    // Attempt upsert
+    await supabase.from("profiles").upsert(
+      { user_id: user.id, theme },
+      { onConflict: "user_id" },
+    );
+  }
   revalidatePath("/", "layout");
 }
 
-// ====================== MEALS ======================
+// ─── MEALS ─────────────────────────────────────────────────────
+
 export interface FoodEntryInput {
   name: string;
   quantity?: string;
@@ -153,7 +222,11 @@ export async function addMeal(args: {
     })
     .select("id")
     .single();
-  if (mealErr) throw mealErr;
+
+  if (mealErr) {
+    console.error("[actions:addMeal] Meal insert failed:", mealErr.message);
+    throw new Error("Não foi possível salvar a refeição. Tente novamente.");
+  }
 
   if (args.entries.length > 0) {
     const rows = args.entries.map((e) => ({
@@ -169,7 +242,15 @@ export async function addMeal(args: {
       notes: e.notes ?? null,
       source: e.source ?? "manual",
     }));
-    await supabase.from("food_entries").insert(rows);
+
+    const { error: entriesErr } = await supabase
+      .from("food_entries")
+      .insert(rows);
+
+    if (entriesErr) {
+      console.error("[actions:addMeal] Food entries insert failed:", entriesErr.message);
+      // Meal was created but entries failed — don't throw, meal is still valid
+    }
   }
 
   revalidatePath("/dashboard");
@@ -180,23 +261,37 @@ export async function addMeal(args: {
 
 export async function deleteMeal(meal_id: string, date: string) {
   const { supabase, user } = await ensureUser();
-  await supabase.from("meals").delete().eq("id", meal_id).eq("user_id", user.id);
+  const { error } = await supabase
+    .from("meals")
+    .delete()
+    .eq("id", meal_id)
+    .eq("user_id", user.id);
+
+  if (error) {
+    console.error("[actions:deleteMeal] Failed:", error.message);
+    throw new Error("Não foi possível remover a refeição.");
+  }
   revalidatePath("/dashboard");
   revalidatePath(`/history/${date}`);
 }
 
 export async function deleteFoodEntry(entry_id: string, date: string) {
   const { supabase, user } = await ensureUser();
-  await supabase
+  const { error } = await supabase
     .from("food_entries")
     .delete()
     .eq("id", entry_id)
     .eq("user_id", user.id);
+
+  if (error) {
+    console.error("[actions:deleteFoodEntry] Failed:", error.message);
+  }
   revalidatePath("/dashboard");
   revalidatePath(`/history/${date}`);
 }
 
-// ====================== WORKOUTS ======================
+// ─── WORKOUTS ──────────────────────────────────────────────────
+
 export async function addWorkout(args: {
   date: string;
   workout_type: WorkoutType;
@@ -209,7 +304,7 @@ export async function addWorkout(args: {
 }) {
   const { supabase, user, day_id } = await ensureDay(args.date);
 
-  // Auto-estimate if not provided
+  // Auto-estimate calories if not provided
   let burned = args.calories_burned;
   if (burned == null || burned === 0) {
     const { data: profile } = await supabase
@@ -242,7 +337,11 @@ export async function addWorkout(args: {
     })
     .select("id")
     .single();
-  if (error) throw error;
+
+  if (error) {
+    console.error("[actions:addWorkout] Insert failed:", error.message);
+    throw new Error("Não foi possível salvar o treino. Tente novamente.");
+  }
 
   revalidatePath("/dashboard");
   revalidatePath(`/history/${args.date}`);
@@ -251,16 +350,22 @@ export async function addWorkout(args: {
 
 export async function deleteWorkout(workout_id: string, date: string) {
   const { supabase, user } = await ensureUser();
-  await supabase
+  const { error } = await supabase
     .from("workouts")
     .delete()
     .eq("id", workout_id)
     .eq("user_id", user.id);
+
+  if (error) {
+    console.error("[actions:deleteWorkout] Failed:", error.message);
+    throw new Error("Não foi possível remover o treino.");
+  }
   revalidatePath("/dashboard");
   revalidatePath(`/history/${date}`);
 }
 
-// ====================== AI Photo Analysis ======================
+// ─── AI Photo Analysis ─────────────────────────────────────────
+
 export async function applyPhotoAnalysis(args: {
   date: string;
   meal_type: MealType;
@@ -288,28 +393,34 @@ export async function applyPhotoAnalysis(args: {
       protein_g: f.protein,
       carbs_g: f.carbs,
       fat_g: f.fat,
-      source: "ai",
+      source: "ai" as const,
     })),
   });
 
-  await supabase.from("meal_photo_analyses").insert({
-    user_id: user.id,
-    meal_id,
-    photo_url: args.photo_url ?? "",
-    detected_foods: args.detected_foods,
-    total_calories: args.total_calories,
-    total_protein_g: args.total_protein,
-    total_carbs_g: args.total_carbs,
-    total_fat_g: args.total_fat,
-    confidence: args.confidence,
-    summary: args.summary ?? null,
-    applied: true,
-  });
+  // Store analysis record — don't fail if this doesn't work
+  try {
+    await supabase.from("meal_photo_analyses").insert({
+      user_id: user.id,
+      meal_id,
+      photo_url: args.photo_url ?? "",
+      detected_foods: args.detected_foods,
+      total_calories: args.total_calories,
+      total_protein_g: args.total_protein,
+      total_carbs_g: args.total_carbs,
+      total_fat_g: args.total_fat,
+      confidence: args.confidence,
+      summary: args.summary ?? null,
+      applied: true,
+    });
+  } catch (err) {
+    console.error("[actions:applyPhotoAnalysis] Analysis record save failed:", err);
+  }
 
   return { meal_id };
 }
 
-// ====================== Day notes ======================
+// ─── Day notes ─────────────────────────────────────────────────
+
 export async function updateDayNotes(args: {
   date: string;
   notes?: string;
@@ -317,7 +428,7 @@ export async function updateDayNotes(args: {
   water_ml?: number;
 }) {
   const { supabase, user, day_id } = await ensureDay(args.date);
-  await supabase
+  const { error } = await supabase
     .from("days")
     .update({
       notes: args.notes ?? null,
@@ -326,10 +437,15 @@ export async function updateDayNotes(args: {
     })
     .eq("id", day_id)
     .eq("user_id", user.id);
+
+  if (error) {
+    console.error("[actions:updateDayNotes] Failed:", error.message);
+  }
   revalidatePath(`/history/${args.date}`);
 }
 
-// ====================== Copy a day ======================
+// ─── Copy a day ────────────────────────────────────────────────
+
 export async function copyDayMeals(from_date: string, to_date: string) {
   const { supabase, user } = await ensureUser();
 
@@ -348,26 +464,30 @@ export async function copyDayMeals(from_date: string, to_date: string) {
 
   let copied = 0;
   for (const m of srcMeals) {
-    await addMeal({
-      date: to_date,
-      meal_type: m.meal_type,
-      name: m.name ?? undefined,
-      time: m.time ?? undefined,
-      notes: m.notes ?? undefined,
-      entries: (srcEntries ?? [])
-        .filter((e) => e.meal_id === m.id)
-        .map((e) => ({
-          name: e.name,
-          quantity: e.quantity ?? undefined,
-          calories: Number(e.calories),
-          protein_g: Number(e.protein_g),
-          carbs_g: Number(e.carbs_g),
-          fat_g: Number(e.fat_g),
-          notes: e.notes ?? undefined,
-          source: "manual" as const,
-        })),
-    });
-    copied++;
+    try {
+      await addMeal({
+        date: to_date,
+        meal_type: m.meal_type,
+        name: m.name ?? undefined,
+        time: m.time ?? undefined,
+        notes: m.notes ?? undefined,
+        entries: (srcEntries ?? [])
+          .filter((e) => e.meal_id === m.id)
+          .map((e) => ({
+            name: e.name,
+            quantity: e.quantity ?? undefined,
+            calories: Number(e.calories) || 0,
+            protein_g: Number(e.protein_g) || 0,
+            carbs_g: Number(e.carbs_g) || 0,
+            fat_g: Number(e.fat_g) || 0,
+            notes: e.notes ?? undefined,
+            source: "manual" as const,
+          })),
+      });
+      copied++;
+    } catch (err) {
+      console.error("[actions:copyDayMeals] Failed to copy meal:", err);
+    }
   }
   revalidatePath(`/history/${to_date}`);
   return { copied };
