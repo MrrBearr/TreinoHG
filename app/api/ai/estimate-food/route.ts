@@ -1,38 +1,29 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { estimateFoods } from "@/lib/openai/estimate-food";
-import { isAIConfigured } from "@/lib/openai/client";
+import { estimateFoods, isGeminiConfigured } from "@/lib/ai";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
 /**
  * POST /api/ai/estimate-food
- *
  * Body: { query: string }
- * Returns: { foods: EstimatedFood[] }  (empty array on graceful failure)
+ * Returns: { foods: EstimatedFood[] }
  *
- * Used by the manual meal entry form to autofill calories/macros from a
- * free-text food description (e.g. "2 ovos e 100g de arroz"). Always
- * runs server-side; the API key is never exposed to the browser.
+ * Used by manual meal entry to auto-estimate calories/macros from text.
+ * Always server-side; keys never exposed to client.
  */
 export async function POST(req: Request) {
-  let supabase;
   try {
-    supabase = createClient();
-  } catch (err) {
-    console.error("[estimate-food] supabase init failed", err);
-    return NextResponse.json(
-      { error: "config_error", message: "Configuração inválida no servidor." },
-      { status: 503 },
-    );
-  }
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    const supabase = createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+  } catch {
+    return NextResponse.json({ error: "auth_error" }, { status: 401 });
   }
 
   let body: { query?: string };
@@ -48,26 +39,26 @@ export async function POST(req: Request) {
   }
   if (query.length > 200) {
     return NextResponse.json(
-      { error: "query_too_long", message: "Descrição muito longa." },
+      { error: "query_too_long" },
       { status: 400 },
     );
   }
 
-  if (!isAIConfigured()) {
+  if (!isGeminiConfigured()) {
     return NextResponse.json(
-      { error: "ai_unavailable", message: "IA não configurada no servidor." },
+      { error: "ai_unavailable", message: "IA não configurada." },
       { status: 503 },
     );
   }
 
-  try {
-    const foods = await estimateFoods(query);
-    return NextResponse.json({ foods });
-  } catch (err) {
-    console.error("[estimate-food] unexpected error", err);
+  const result = await estimateFoods(query);
+
+  if (!result.ok) {
     return NextResponse.json(
-      { error: "ai_failed", message: "Falha ao estimar." },
+      { error: "ai_failed", foods: [] },
       { status: 503 },
     );
   }
+
+  return NextResponse.json({ foods: result.foods });
 }

@@ -3,21 +3,21 @@ import { cookies } from "next/headers";
 
 /**
  * Server-side Supabase client.
- *
- * In production we never want a missing env var to crash the whole server
- * render — we surface a clear console error and let the caller's safe-query
- * wrappers return their fallback shape.
+ * Throws a clear error if env vars are missing so failures don't cascade
+ * as cryptic "Cannot read properties of undefined" deep in the stack.
  */
 export function createClient() {
-  const cookieStore = cookies();
-
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
   if (!url || !key) {
     throw new Error(
-      "Supabase env vars are missing (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY). Configure them in your Vercel project settings.",
+      "[Supabase] NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY is missing. " +
+        "Check your environment variables.",
     );
   }
+
+  const cookieStore = cookies();
 
   return createServerClient(url, key, {
     cookies: {
@@ -25,14 +25,18 @@ export function createClient() {
         return cookieStore.getAll();
       },
       setAll(
-        cookiesToSet: { name: string; value: string; options?: CookieOptions }[],
+        cookiesToSet: {
+          name: string;
+          value: string;
+          options?: CookieOptions;
+        }[],
       ) {
         try {
           cookiesToSet.forEach(({ name, value, options }) =>
             cookieStore.set(name, value, options),
           );
         } catch {
-          // Server component - cookies cannot be set here.
+          // Server component — cookies cannot be set here.
         }
       },
     },

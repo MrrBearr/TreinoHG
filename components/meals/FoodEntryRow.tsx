@@ -5,7 +5,7 @@ import { Sparkles, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { EstimatedFood } from "@/lib/openai/estimate-food";
+import type { EstimatedFood } from "@/lib/ai/types";
 
 export interface DraftEntry {
   id: string;
@@ -15,8 +15,8 @@ export interface DraftEntry {
   protein_g: string;
   carbs_g: string;
   fat_g: string;
-  /** Internal flag used by the form for optimistic UI; never persisted. */
-  ai_estimated?: boolean;
+  /** Marks this row was filled by AI — shown for user awareness */
+  ai_filled?: boolean;
 }
 
 export function emptyEntry(): DraftEntry {
@@ -34,20 +34,17 @@ export function emptyEntry(): DraftEntry {
   };
 }
 
-/** Convert an AI-estimated food into a draft entry suitable for the form. */
+/** Convert an AI-estimated food into a DraftEntry */
 export function estimatedToDraft(f: EstimatedFood): DraftEntry {
   return {
-    id:
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : Math.random().toString(36).slice(2),
+    ...emptyEntry(),
     name: f.name,
     quantity: f.quantity,
     calories: f.calories ? String(f.calories) : "",
     protein_g: f.protein_g ? String(f.protein_g) : "",
     carbs_g: f.carbs_g ? String(f.carbs_g) : "",
     fat_g: f.fat_g ? String(f.fat_g) : "",
-    ai_estimated: true,
+    ai_filled: true,
   };
 }
 
@@ -56,37 +53,26 @@ interface FoodEntryRowProps {
   onChange: (e: DraftEntry) => void;
   onRemove?: () => void;
   removable?: boolean;
-  /**
-   * Called when the AI returns 2+ foods so the parent form can replace this
-   * row with multiple rows. When the AI returns a single food, the row
-   * autofills its own fields and does not call this.
-   */
-  onMultiSuggest?: (foods: EstimatedFood[]) => void;
+  /** Called when AI returns 2+ foods — parent replaces this row with multiple */
+  onMultiExpand?: (foods: EstimatedFood[]) => void;
 }
 
-const MIN_NAME_CHARS = 3;
 const DEBOUNCE_MS = 1200;
+const MIN_CHARS = 3;
 
 export function FoodEntryRow({
   entry,
   onChange,
   onRemove,
   removable,
-  onMultiSuggest,
+  onMultiExpand,
 }: FoodEntryRowProps) {
   const [loading, setLoading] = React.useState(false);
   const [errored, setErrored] = React.useState(false);
-  const lastQueriedRef = React.useRef<string>("");
+  const lastQueryRef = React.useRef("");
   const abortRef = React.useRef<AbortController | null>(null);
-
-  // Keep refs to the latest entry + handlers so the debounce timer can
-  // resolve against the most recent state without stale closures.
   const entryRef = React.useRef(entry);
   entryRef.current = entry;
-  const onChangeRef = React.useRef(onChange);
-  onChangeRef.current = onChange;
-  const onMultiRef = React.useRef(onMultiSuggest);
-  onMultiRef.current = onMultiSuggest;
 
   const set = <K extends keyof DraftEntry>(k: K, v: DraftEntry[K]) =>
     onChange({ ...entry, [k]: v });
@@ -94,114 +80,103 @@ export function FoodEntryRow({
   const macrosEmpty = (e: DraftEntry) =>
     !e.calories && !e.protein_g && !e.carbs_g && !e.fat_g;
 
-  const queryFor = (e: DraftEntry) =>
+  const buildQuery = (e: DraftEntry) =>
     [e.quantity, e.name].filter(Boolean).join(" ").trim();
 
-  const runEstimate = React.useCallback(async (manual: boolean) => {
-    const current = entryRef.current;
-    const query = queryFor(current);
-    if (query.length < MIN_NAME_CHARS) return;
+  const runEstimate = React.useCallback(
+    async (manual: boolean) => {
+      const current = entryRef.current;
+      const query = buildQuery(current);
+      if (query.length < MIN_CHARS) return;
 
-    // Avoid duplicate calls for the same query unless user explicitly clicks.
-    if (!manual && lastQueriedRef.current === query) return;
-    lastQueriedRef.current = query;
+      // Skip duplicate requests unless explicitly triggered
+      if (!manual && lastQueryRef.current === query) return;
+      lastQueryRef.current = query;
 
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
 
-    setLoading(true);
-    setErrored(false);
-    try {
-      const res = await fetch("/api/ai/estimate-food", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query }),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
+      setLoading(true);
+      setErrored(false);
+      try {
+        const res = await fetch("/api/ai/estimate-food", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ query }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          setErrored(true);
+          return;
+        }
+
+        const json: { foods?: EstimatedFood[] } = await res.json();
+        const foods = Array.isArray(json.foods) ? json.foods : [];
+        if (foods.length === 0) {
+          if (manual) setErrored(true);
+          return;
+        }
+
+        // Multi-food: tell parent to expand
+        if (foods.length > 1 && onMultiExpand) {
+          onMultiExpand(foods);
+          return;
+        }
+
+        // Single food: fill this row
+        const f = foods[0];
+        const target = entryRef.current;
+        onChange({
+          ...target,
+          name: manual || !target.name ? f.name : target.name,
+          quantity: manual || !target.quantity ? f.quantity : target.quantity,
+          calories:
+            manual || !target.calories
+              ? f.calories ? String(f.calories) : ""
+              : target.calories,
+          protein_g:
+            manual || !target.protein_g
+              ? f.protein_g ? String(f.protein_g) : ""
+              : target.protein_g,
+          carbs_g:
+            manual || !target.carbs_g
+              ? f.carbs_g ? String(f.carbs_g) : ""
+              : target.carbs_g,
+          fat_g:
+            manual || !target.fat_g
+              ? f.fat_g ? String(f.fat_g) : ""
+              : target.fat_g,
+          ai_filled: true,
+        });
+      } catch (err) {
+        if ((err as Error)?.name === "AbortError") return;
         setErrored(true);
-        return;
+      } finally {
+        setLoading(false);
       }
-      const json: { foods?: EstimatedFood[] } = await res.json();
-      const foods = Array.isArray(json.foods) ? json.foods : [];
-      if (foods.length === 0) {
-        if (manual) setErrored(true);
-        return;
-      }
+    },
+    [onChange, onMultiExpand],
+  );
 
-      // If 2+ foods came back, let the parent expand into multiple rows.
-      // If only 1, fill the current row in place. We never overwrite values
-      // the user has edited unless they explicitly hit the AI button.
-      if (foods.length > 1 && onMultiRef.current) {
-        onMultiRef.current(foods);
-        return;
-      }
-
-      const first = foods[0];
-      const target = entryRef.current;
-      const next: DraftEntry = {
-        ...target,
-        name: manual || !target.name ? first.name : target.name,
-        quantity:
-          manual || !target.quantity ? first.quantity : target.quantity,
-        calories:
-          manual || !target.calories
-            ? first.calories
-              ? String(first.calories)
-              : target.calories
-            : target.calories,
-        protein_g:
-          manual || !target.protein_g
-            ? first.protein_g
-              ? String(first.protein_g)
-              : target.protein_g
-            : target.protein_g,
-        carbs_g:
-          manual || !target.carbs_g
-            ? first.carbs_g
-              ? String(first.carbs_g)
-              : target.carbs_g
-            : target.carbs_g,
-        fat_g:
-          manual || !target.fat_g
-            ? first.fat_g
-              ? String(first.fat_g)
-              : target.fat_g
-            : target.fat_g,
-        ai_estimated: true,
-      };
-      onChangeRef.current(next);
-    } catch (err) {
-      if ((err as { name?: string })?.name === "AbortError") return;
-      console.error("[ai] estimate row failed", err);
-      setErrored(true);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Debounced auto-estimate while the user types — only fires when:
-  // - name is long enough
-  // - all macro fields are still empty (so we never overwrite user input)
-  // - the same query hasn't been asked already
+  // Debounced auto-estimate: only when name has min chars and macros are empty
   React.useEffect(() => {
-    if (!entry.name || entry.name.length < MIN_NAME_CHARS) return;
+    if (!entry.name || entry.name.length < MIN_CHARS) return;
     if (!macrosEmpty(entry)) return;
-    const query = queryFor(entry);
-    if (lastQueriedRef.current === query) return;
+    const query = buildQuery(entry);
+    if (lastQueryRef.current === query) return;
 
-    const handle = setTimeout(() => {
-      runEstimate(false);
-    }, DEBOUNCE_MS);
-    return () => clearTimeout(handle);
-  }, [entry.name, entry.quantity, entry.calories, entry.protein_g, entry.carbs_g, entry.fat_g, runEstimate, entry]);
+    const timer = setTimeout(() => runEstimate(false), DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entry.name, entry.quantity]);
 
-  // Cancel any in-flight request when the row unmounts.
+  // Cleanup on unmount
   React.useEffect(() => () => abortRef.current?.abort(), []);
 
   return (
-    <div className="space-y-3 rounded-2xl border border-border bg-card/60 p-3">
+    <div className="space-y-3 rounded-2xl border border-border bg-card/60 p-3 transition-all">
       <div className="flex items-center gap-2">
         <Input
           value={entry.name}
@@ -219,18 +194,13 @@ export function FoodEntryRow({
         <Button
           type="button"
           size="icon-sm"
-          variant={entry.ai_estimated ? "default" : "ghost"}
+          variant={entry.ai_filled ? "default" : "ghost"}
           aria-label="Estimar com IA"
-          title="Estimar calorias e macros com IA"
+          title="Estimar calorias e macros"
           onClick={() => runEstimate(true)}
-          disabled={
-            loading || !entry.name || entry.name.length < MIN_NAME_CHARS
-          }
-          className={cn(loading && "animate-pulse")}
+          disabled={loading || !entry.name || entry.name.length < MIN_CHARS}
         >
-          <Sparkles
-            className={cn("h-4 w-4", loading && "animate-spin")}
-          />
+          <Sparkles className={cn("h-4 w-4", loading && "animate-spin")} />
         </Button>
         {removable && (
           <Button
@@ -269,21 +239,22 @@ export function FoodEntryRow({
           unit="g"
         />
       </div>
-      {(loading || errored || entry.ai_estimated) && (
+      {/* Status indicator */}
+      {(loading || errored || entry.ai_filled) && (
         <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
           {loading ? (
             <>
               <Sparkles className="h-3 w-3 animate-pulse text-primary" />
-              Estimando com IA…
+              <span>Estimando com IA...</span>
             </>
           ) : errored ? (
             <span className="text-warning">
-              Não consegui estimar agora — preencha manualmente.
+              Não consegui estimar — preencha manualmente.
             </span>
-          ) : entry.ai_estimated ? (
+          ) : entry.ai_filled ? (
             <>
               <Sparkles className="h-3 w-3 text-primary" />
-              Estimado por IA — confira e ajuste se precisar.
+              <span>Estimado por IA — confira e ajuste se precisar.</span>
             </>
           ) : null}
         </div>

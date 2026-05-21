@@ -5,7 +5,6 @@ import { Sparkles, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 
 export function AIInsightCard({ date }: { date: string }) {
   const [insight, setInsight] = React.useState<string>("");
@@ -34,19 +33,24 @@ export function AIInsightCard({ date }: { date: string }) {
   }, [load]);
 
   return (
-    <Card className="relative overflow-hidden border-accent/30 bg-gradient-to-br from-accent/15 via-card to-card">
-      <div className="absolute -left-8 -bottom-8 h-32 w-32 rounded-full bg-accent/20 blur-2xl" />
+    <Card className="relative overflow-hidden border-accent/20">
+      {/* Ambient background */}
+      <div className="absolute -left-6 -bottom-6 h-28 w-28 rounded-full bg-accent/15 blur-3xl" />
+      <div className="absolute right-0 top-0 h-16 w-16 rounded-full bg-primary/8 blur-2xl" />
+
       <div className="relative p-5">
         <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="grid h-8 w-8 place-items-center rounded-lg bg-foreground text-background">
+          <div className="flex items-center gap-2.5">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-foreground/90 text-background shadow-lg">
               <Sparkles className="h-4 w-4" />
             </span>
             <div>
-              <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+              <div className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
+                Coach IA
+              </div>
+              <div className="text-[11px] text-muted-foreground">
                 Insight de hoje
               </div>
-              <div className="text-xs text-muted-foreground">Coach IA</div>
             </div>
           </div>
           <Button
@@ -55,27 +59,33 @@ export function AIInsightCard({ date }: { date: string }) {
             onClick={load}
             aria-label="Atualizar"
             disabled={loading}
+            className="rounded-full"
           >
-            <RefreshCw className={loading ? "animate-spin" : ""} />
+            <RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
           </Button>
         </div>
+
         {loading ? (
-          <div className="space-y-2">
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-4/5" />
+          <div className="space-y-2.5">
+            <div className="h-4 w-full rounded-lg shimmer" />
+            <div className="h-4 w-4/5 rounded-lg shimmer" />
           </div>
         ) : error ? (
           <p className="text-sm text-muted-foreground">
-            Não consegui gerar o insight agora. Tente novamente em instantes.
+            Não consegui gerar o insight agora. Tente novamente.
           </p>
         ) : (
-          <p className="text-sm font-medium leading-relaxed">{insight}</p>
+          <p className="text-sm font-medium leading-relaxed animate-fade-in">
+            {insight}
+          </p>
         )}
+
         <Link
           href="/insights"
-          className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+          className="mt-4 inline-flex items-center gap-1.5 text-[11px] font-semibold text-primary hover:underline transition-colors"
         >
-          Conversar com o coach →
+          <Sparkles className="h-3 w-3" />
+          Conversar com o coach
         </Link>
       </div>
     </Card>

@@ -10,11 +10,13 @@ export default async function AppLayout({
   children: React.ReactNode;
 }) {
   let theme: string | null = null;
+
   try {
     const supabase = createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
+
     if (!user) redirect("/login");
 
     const { data: profile } = await supabase
@@ -22,15 +24,20 @@ export default async function AppLayout({
       .select("theme")
       .eq("user_id", user.id)
       .maybeSingle();
-    theme = (profile?.theme as string | null) ?? null;
+
+    theme = (profile?.theme as string) ?? null;
   } catch (err) {
-    // `redirect()` throws a special error that must propagate; everything
-    // else is logged and we render the shell with the default theme so the
-    // app does not white-screen on transient Supabase issues.
-    if ((err as { digest?: string })?.digest?.startsWith("NEXT_REDIRECT")) {
+    // Next.js redirect() throws a special error — let it propagate
+    if (
+      err &&
+      typeof err === "object" &&
+      "digest" in err &&
+      String((err as { digest: string }).digest).startsWith("NEXT_REDIRECT")
+    ) {
       throw err;
     }
-    console.error("[(app)/layout] failed to load profile theme", err);
+    // Everything else: log but don't crash the layout shell
+    console.error("[(app)/layout] auth/profile error:", err);
   }
 
   return (

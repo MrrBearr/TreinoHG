@@ -11,7 +11,7 @@ import {
   estimatedToDraft,
   type DraftEntry,
 } from "./FoodEntryRow";
-import type { EstimatedFood } from "@/lib/openai/estimate-food";
+import type { EstimatedFood } from "@/lib/ai/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -80,11 +80,10 @@ export function AddMealForm({
   }
 
   /**
-   * Replace a single row with the foods returned by the AI when the user
-   * typed a description that resolves to multiple distinct foods (e.g.
-   * "2 ovos e 100g de arroz" -> [Ovos, Arroz]).
+   * When AI returns multiple foods from a single text entry
+   * (e.g. "2 ovos e arroz"), replace that row with multiple rows.
    */
-  function expandFromSuggestions(idx: number, foods: EstimatedFood[]) {
+  function expandFromAI(idx: number, foods: EstimatedFood[]) {
     if (foods.length === 0) return;
     setEntries((prev) => {
       const next = [...prev];
@@ -92,6 +91,7 @@ export function AddMealForm({
       next.splice(idx, 1, ...drafts);
       return next;
     });
+    toast.success(`${foods.length} alimentos detectados pela IA`);
   }
 
   async function onSubmit(ev: React.FormEvent<HTMLFormElement>) {
@@ -202,7 +202,7 @@ export function AddMealForm({
             onChange={(v) => updateEntry(i, v)}
             removable={entries.length > 1}
             onRemove={() => removeEntry(i)}
-            onMultiSuggest={(foods) => expandFromSuggestions(i, foods)}
+            onMultiExpand={(foods) => expandFromAI(i, foods)}
           />
         ))}
       </div>
@@ -228,7 +228,8 @@ export function AddMealForm({
               {formatKcal(totals.calories)}
             </div>
             <div className="text-[10px] text-muted-foreground">
-              P {formatNumber(totals.protein_g)} · C {formatNumber(totals.carbs_g)} · G {formatNumber(totals.fat_g)}
+              P {formatNumber(totals.protein_g)} · C{" "}
+              {formatNumber(totals.carbs_g)} · G {formatNumber(totals.fat_g)}
             </div>
           </div>
           <Button type="submit" loading={saving} size="lg" className="px-6">

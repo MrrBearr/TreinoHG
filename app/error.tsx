@@ -7,11 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 /**
- * Root client error boundary. Catches errors thrown anywhere below the root
- * layout (server or client) and shows a friendly fallback so the app never
- * white-screens.
+ * Root error boundary. Catches any uncaught error in the app tree and
+ * shows a friendly fallback instead of a white screen.
  */
-export default function ErrorBoundary({
+export default function RootError({
   error,
   reset,
 }: {
@@ -19,31 +18,22 @@ export default function ErrorBoundary({
   reset: () => void;
 }) {
   React.useEffect(() => {
-    // Always log so dev console shows the cause.
     console.error("[app/error]", error);
   }, [error]);
 
-  const isDev = process.env.NODE_ENV === "development";
-
   return (
-    <div className="flex min-h-screen items-center justify-center px-5 py-10">
+    <div className="flex min-h-screen items-center justify-center px-5 py-10 bg-background">
       <Card className="w-full max-w-md p-6 text-center space-y-4 animate-fade-in">
         <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-warning/15 text-warning">
           <AlertTriangle className="h-7 w-7" />
         </div>
-        <div className="space-y-1">
-          <h1 className="font-display text-xl font-bold tracking-tight">
-            Algo deu errado
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Tivemos um problema ao carregar essa tela. Tente novamente em
-            instantes.
-          </p>
-        </div>
-        {isDev && (
-          <pre className="max-h-40 overflow-auto rounded-xl bg-secondary p-3 text-left text-[11px] leading-snug text-muted-foreground">
+        <h1 className="font-display text-xl font-bold">Algo deu errado</h1>
+        <p className="text-sm text-muted-foreground">
+          Um erro inesperado aconteceu. Tente recarregar a página.
+        </p>
+        {process.env.NODE_ENV === "development" && (
+          <pre className="max-h-32 overflow-auto rounded-xl bg-secondary p-3 text-left text-[11px] text-muted-foreground">
             {error.message}
-            {error.digest ? `\n\ndigest: ${error.digest}` : ""}
           </pre>
         )}
         <div className="flex flex-col gap-2">
