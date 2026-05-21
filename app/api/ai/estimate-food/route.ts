@@ -54,7 +54,7 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         error: "ai_unavailable",
-        message: "IA não configurada no servidor. Verifique GEMINI_API_KEY_*.",
+        message: "IA não configurada no servidor. Verifique TEXT_AI_API_KEY ou NVIDIA_API_KEY.",
         foods: [],
       },
       { status: 503 },

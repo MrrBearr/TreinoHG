@@ -1,23 +1,15 @@
 /**
- * Multi-provider AI chain.
+ * Two-provider AI chain with task-aware routing.
  *
- * For TEXT requests:  Gemini → OpenRouter → LLM7
- * For IMAGE requests: Gemini only (multi-key failover internally).
+ *   VISION (image)  → NVIDIA primary, TEXT_AI fallback
+ *   TEXT            → TEXT_AI primary, NVIDIA fallback
  *
- * Why? Free-tier vision support on OpenRouter and LLM7 is inconsistent —
- * many free models reject multimodal payloads, and the few that accept
- * them have very low rate limits. Gemini's flash models are stable for
- * vision and our key already has a 3-key rotation. If Gemini's keys are
- * exhausted for vision, falling back to a text-only provider would just
- * waste another quota slot for the same failure mode.
- *
- * Providers without a configured key are skipped silently. The first
- * provider that returns a non-empty success wins.
+ * Free-tier aware: providers without a configured key are skipped
+ * silently. The first provider that returns non-empty success wins.
  */
 
-import { geminiProvider } from "./gemini";
-import { openrouterProvider } from "./openrouter";
-import { llm7Provider } from "./llm7";
+import { nvidiaProvider } from "./nvidia";
+import { textAIProvider } from "./text-ai";
 import type {
   AIHealthResult,
   AIProvider,
@@ -26,56 +18,30 @@ import type {
   AIResponse,
 } from "../types";
 
-/** Priority order for TEXT requests. */
-const TEXT_PROVIDERS: AIProvider[] = [
-  geminiProvider,
-  openrouterProvider,
-  llm7Provider,
-];
-
-/**
- * Vision request providers. Currently only Gemini — see file-level note.
- * If you want to enable OpenRouter as a vision fallback, add it here and
- * make sure OPENROUTER_MODEL is a vision-capable model (e.g.
- * `google/gemini-2.0-flash-exp:free`, `meta-llama/llama-3.2-90b-vision-instruct:free`).
- */
-const VISION_PROVIDERS: AIProvider[] = [geminiProvider];
+const VISION_CHAIN: AIProvider[] = [nvidiaProvider, textAIProvider];
+const TEXT_CHAIN: AIProvider[] = [textAIProvider, nvidiaProvider];
 
 /** True when at least one provider is configured. */
 export function isAIConfigured(): boolean {
-  return TEXT_PROVIDERS.some((p) => p.isConfigured());
+  return [nvidiaProvider, textAIProvider].some((p) => p.isConfigured());
 }
 
 /** Inspect provider configuration without exposing keys. */
 export function getAIHealth(): AIHealthResult {
-  const providers: AIProviderHealth[] = TEXT_PROVIDERS.map((p) => {
-    if (p.name === "gemini") {
-      const numKeys = [
-        process.env.GEMINI_API_KEY_1,
-        process.env.GEMINI_API_KEY_2,
-        process.env.GEMINI_API_KEY_3,
-      ].filter((k): k is string => Boolean(k && k.length > 10)).length;
-      return {
-        name: "gemini",
-        configured: numKeys > 0,
-        numKeys,
-        model: process.env.GEMINI_MODEL_PRIMARY ?? "gemini-2.0-flash",
-      };
-    }
-    if (p.name === "openrouter") {
-      return {
-        name: "openrouter",
-        configured: p.isConfigured(),
-        model:
-          process.env.OPENROUTER_MODEL ?? "google/gemini-2.0-flash-exp:free",
-      };
-    }
-    return {
-      name: "llm7",
-      configured: p.isConfigured(),
-      model: process.env.LLM7_MODEL ?? "gpt-4o-mini",
-    };
-  });
+  const providers: AIProviderHealth[] = [
+    {
+      name: "nvidia",
+      configured: nvidiaProvider.isConfigured(),
+      model: process.env.NVIDIA_MODEL || "meta/llama-3.2-90b-vision-instruct",
+      baseUrl: process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1",
+    },
+    {
+      name: "text_ai",
+      configured: textAIProvider.isConfigured(),
+      model: process.env.TEXT_AI_MODEL || "llama-3.3-70b-versatile",
+      baseUrl: process.env.TEXT_AI_BASE_URL || "https://api.groq.com/openai/v1",
+    },
+  ];
 
   return {
     configured: providers.some((p) => p.configured),
@@ -84,19 +50,17 @@ export function getAIHealth(): AIHealthResult {
 }
 
 /**
- * Run an AI request through the appropriate provider chain.
+ * Run an AI request through the appropriate chain.
  * Returns the first successful response, or an aggregated error.
  */
 export async function runAIRequest(req: AIRequest): Promise<AIResponse> {
   const isVision = Boolean(req.image);
-  const providers = isVision ? VISION_PROVIDERS : TEXT_PROVIDERS;
+  const chain = isVision ? VISION_CHAIN : TEXT_CHAIN;
   const errors: string[] = [];
   let attempted = 0;
 
-  for (const provider of providers) {
-    if (!provider.isConfigured()) {
-      continue;
-    }
+  for (const provider of chain) {
+    if (!provider.isConfigured()) continue;
     attempted++;
 
     console.log(
@@ -115,13 +79,13 @@ export async function runAIRequest(req: AIRequest): Promise<AIResponse> {
 
     if (res.ok && res.text) {
       console.log(
-        `[ai-chain] ✓ ${provider.name} succeeded (model=${res.modelUsed}, ${res.text.length} chars)`,
+        `[ai-chain] ✓ ${provider.name} ok (model=${res.modelUsed}, ${res.text.length} chars)`,
       );
       return res;
     }
 
     console.warn(
-      `[ai-chain] ✗ ${provider.name} failed: ${res.error ?? "(no error message)"}`,
+      `[ai-chain] ✗ ${provider.name} failed: ${res.error ?? "(no error)"}`,
     );
     errors.push(`${provider.name}:${res.error ?? "failed"}`);
   }
@@ -131,8 +95,8 @@ export async function runAIRequest(req: AIRequest): Promise<AIResponse> {
       ok: false,
       text: "",
       error: isVision
-        ? "Análise de imagem requer Gemini configurado (GEMINI_API_KEY_*)."
-        : "Nenhum provedor de IA configurado. Defina GEMINI_API_KEY_*, OPENROUTER_API_KEY ou LLM7_API_KEY.",
+        ? "Análise de imagem requer NVIDIA_API_KEY ou TEXT_AI_API_KEY configurado."
+        : "Nenhum provedor de IA configurado. Defina TEXT_AI_API_KEY ou NVIDIA_API_KEY.",
     };
   }
 

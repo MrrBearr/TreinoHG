@@ -8,15 +8,10 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/ai/health
  *
- * Diagnostic endpoint that reports which AI providers are configured.
- * No auth required so you can verify connectivity even when sessions
- * are misbehaving.
+ * Diagnostic endpoint — reports which providers are configured.
+ * No auth required so you can verify connectivity independently.
  *
- * Query params:
- *   ?test=1  — perform an actual round-trip through the provider chain
- *
- * Returns:
- *   { configured, providers: [{name, configured, model, numKeys?}], test? }
+ * ?test=1 — perform an actual round-trip through the chain.
  */
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -27,10 +22,7 @@ export async function GET(req: Request) {
 
   if (runTest) {
     if (!health.configured) {
-      response.test = {
-        ok: false,
-        error: "No AI providers configured",
-      };
+      response.test = { ok: false, error: "No AI providers configured" };
     } else {
       try {
         const res = await runAIRequest({
@@ -48,10 +40,7 @@ export async function GET(req: Request) {
           modelUsed: res.modelUsed,
         };
       } catch (err) {
-        response.test = {
-          ok: false,
-          error: (err as Error).message,
-        };
+        response.test = { ok: false, error: (err as Error).message };
       }
     }
   }

@@ -1,26 +1,26 @@
 /**
- * Shared AI types for the TreinoHG multi-provider integration.
+ * Shared AI types for the TreinoHG dual-provider integration.
  *
- * Provider chain: Gemini → OpenRouter → LLM7
+ *   NVIDIA   → primary for vision (meal photo analysis)
+ *   TEXT_AI  → primary for text (food estimation, insights, chat)
+ *
+ * Each provider falls back to the other when the primary fails.
  */
 
 // ─── Provider abstraction ──────────────────────────────────────
 
-export type AIProviderName = "gemini" | "openrouter" | "llm7";
+export type AIProviderName = "nvidia" | "text_ai";
 
-/** Unified request shape that every provider knows how to translate. */
 export interface AIRequest {
-  /** System-level instructions (role/persona/output schema). */
   systemInstruction?: string;
-  /** The user prompt. */
   userText: string;
-  /** Optional image for multimodal requests. base64 = bytes only (no data: prefix). */
+  /** base64 = bytes only (no data: prefix). */
   image?: { mimeType: string; base64: string };
   temperature?: number;
   maxOutputTokens?: number;
-  /** When true, ask the provider for JSON output (skipped automatically for image requests). */
+  /** When true, ask provider for JSON output (auto-skipped for image requests). */
   jsonMode?: boolean;
-  /** Logical task name for logging/metrics. */
+  /** Logical task name for logging. */
   task?: AIRequestKind;
 }
 
@@ -42,7 +42,7 @@ export interface AIProviderHealth {
   name: AIProviderName;
   configured: boolean;
   model?: string;
-  numKeys?: number;
+  baseUrl?: string;
 }
 
 export interface AIHealthResult {
@@ -85,14 +85,6 @@ export interface AIEstimateResult {
   foods: EstimatedFood[];
   reason?: "unavailable" | "failed" | "rate_limited";
   providerUsed?: AIProviderName;
-}
-
-export interface GeminiConfig {
-  keys: string[];
-  primaryModel: string;
-  fastModel: string;
-  timeout: number;
-  maxRetries: number;
 }
 
 export type AIRequestKind =
