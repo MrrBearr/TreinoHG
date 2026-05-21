@@ -174,55 +174,6 @@ export async function getDaySummary(date: string): Promise<DaySummary> {
   }, empty);
 }
 
-export async function getDaySummary(date: string): Promise<DaySummary> {
-  return safeRun(
-    "getDaySummary",
-    async () => {
-      const [{ entries, meals }, workouts] = await Promise.all([
-        getDayMeals(date),
-        getDayWorkouts(date),
-      ]);
-      const macros = sumMacros(
-        entries.map((e) => ({
-          calories: Number(e.calories) || 0,
-          protein_g: Number(e.protein_g) || 0,
-          carbs_g: Number(e.carbs_g) || 0,
-          fat_g: Number(e.fat_g) || 0,
-        })),
-      );
-      const burned = workouts.reduce(
-        (s, w) => s + (Number(w.calories_burned) || 0),
-        0,
-      );
-      const minutes = workouts.reduce(
-        (s, w) => s + (Number(w.duration_min) || 0),
-        0,
-      );
-      return {
-        date,
-        consumed_kcal: Math.round(macros.calories),
-        burned_kcal: burned,
-        net_kcal: Math.round(macros.calories) - burned,
-        protein_g: Math.round(macros.protein_g),
-        carbs_g: Math.round(macros.carbs_g),
-        fat_g: Math.round(macros.fat_g),
-        meal_count: meals.length,
-        workout_count: workouts.length,
-        workout_minutes: minutes,
-      };
-    },
-    emptyDaySummary(date),
-  );
-}
-
-/** YYYY-MM-DD in local time. Mirrors lib/utils.toDateKey to avoid UTC drift. */
-function localDateKey(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
 export async function getRecentDays(days = 30): Promise<DaySummary[]> {
   return safe("getRecentDays", async () => {
     const supabase = createClient();
