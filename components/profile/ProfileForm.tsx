@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Save, Calculator } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,7 @@ interface ProfileFormProps {
 }
 
 export function ProfileForm({ profile }: ProfileFormProps) {
+  const router = useRouter();
   const [saving, setSaving] = React.useState(false);
   const [name, setName] = React.useState(profile?.display_name ?? "");
   const [age, setAge] = React.useState<number | "">(profile?.age ?? "");
@@ -122,7 +124,16 @@ export function ProfileForm({ profile }: ProfileFormProps) {
       await updateProfile(fd);
       toast.success("Perfil salvo");
     } catch (e) {
-      toast.error("Erro ao salvar", { description: (e as Error).message });
+      console.error("[ProfileForm] save failed:", e);
+      const msg = (e as Error).message || "";
+      if ((e as Error).name === "AuthRequiredError" || /Sessão expirada/i.test(msg)) {
+        toast.error("Sessão expirada", { description: "Faça login novamente." });
+        router.push("/login");
+        return;
+      }
+      toast.error("Erro ao salvar", {
+        description: msg || "Tente novamente.",
+      });
     } finally {
       setSaving(false);
     }

@@ -121,12 +121,19 @@ export function AddMealForm({
         entries: valid,
       });
       toast.success("Refeição registrada");
+      // Single navigation — `revalidatePath` already ran server-side, no
+      // need to also call `router.refresh()` (causes double-render flash).
       router.push("/dashboard");
-      router.refresh();
     } catch (e) {
-      console.error(e);
+      console.error("[AddMealForm] save failed:", e);
+      const msg = (e as Error).message || "";
+      if ((e as Error).name === "AuthRequiredError" || /Sessão expirada/i.test(msg)) {
+        toast.error("Sessão expirada", { description: "Faça login novamente." });
+        router.push("/login");
+        return;
+      }
       toast.error("Não foi possível salvar", {
-        description: (e as Error).message,
+        description: msg || "Tente novamente.",
       });
       setSaving(false);
     }

@@ -75,10 +75,16 @@ export function AddWorkoutForm({
       });
       toast.success("Treino registrado");
       router.push("/dashboard");
-      router.refresh();
     } catch (e) {
+      console.error("[AddWorkoutForm] save failed:", e);
+      const msg = (e as Error).message || "";
+      if ((e as Error).name === "AuthRequiredError" || /Sessão expirada/i.test(msg)) {
+        toast.error("Sessão expirada", { description: "Faça login novamente." });
+        router.push("/login");
+        return;
+      }
       toast.error("Não foi possível salvar", {
-        description: (e as Error).message,
+        description: msg || "Tente novamente.",
       });
       setSaving(false);
     }

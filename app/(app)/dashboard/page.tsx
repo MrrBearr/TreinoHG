@@ -15,7 +15,6 @@ import {
   getProfile,
   getDayMeals,
   getDayWorkouts,
-  getOrCreateDay,
   getDaySummary,
 } from "@/lib/queries";
 import { toDateKey } from "@/lib/utils";
@@ -23,10 +22,9 @@ import { getDailyPhrase } from "@/lib/motivational-phrases";
 
 export default async function DashboardPage() {
   const dateKey = toDateKey();
-  const [profile, _day, { meals, entries }, workouts, summary] =
+  const [profile, { meals, entries }, workouts, summary] =
     await Promise.all([
       getProfile(),
-      getOrCreateDay(dateKey),
       getDayMeals(dateKey),
       getDayWorkouts(dateKey),
       getDaySummary(dateKey),

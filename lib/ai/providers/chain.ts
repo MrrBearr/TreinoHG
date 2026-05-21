@@ -1,12 +1,18 @@
 /**
  * Multi-provider AI chain.
  *
- * Tries providers in priority order: Gemini → OpenRouter → LLM7.
- * The first provider that returns a non-empty successful response wins.
- * If all configured providers fail, returns a graceful AIResponse with
- * ok=false and an aggregated error message.
+ * For TEXT requests:  Gemini → OpenRouter → LLM7
+ * For IMAGE requests: Gemini only (multi-key failover internally).
  *
- * Providers that aren't configured (no API key) are skipped silently.
+ * Why? Free-tier vision support on OpenRouter and LLM7 is inconsistent —
+ * many free models reject multimodal payloads, and the few that accept
+ * them have very low rate limits. Gemini's flash models are stable for
+ * vision and our key already has a 3-key rotation. If Gemini's keys are
+ * exhausted for vision, falling back to a text-only provider would just
+ * waste another quota slot for the same failure mode.
+ *
+ * Providers without a configured key are skipped silently. The first
+ * provider that returns a non-empty success wins.
  */
 
 import { geminiProvider } from "./gemini";
@@ -20,21 +26,29 @@ import type {
   AIResponse,
 } from "../types";
 
-/** Priority order — Gemini first, then OpenRouter, then LLM7. */
-const PROVIDERS: AIProvider[] = [
+/** Priority order for TEXT requests. */
+const TEXT_PROVIDERS: AIProvider[] = [
   geminiProvider,
   openrouterProvider,
   llm7Provider,
 ];
 
+/**
+ * Vision request providers. Currently only Gemini — see file-level note.
+ * If you want to enable OpenRouter as a vision fallback, add it here and
+ * make sure OPENROUTER_MODEL is a vision-capable model (e.g.
+ * `google/gemini-2.0-flash-exp:free`, `meta-llama/llama-3.2-90b-vision-instruct:free`).
+ */
+const VISION_PROVIDERS: AIProvider[] = [geminiProvider];
+
 /** True when at least one provider is configured. */
 export function isAIConfigured(): boolean {
-  return PROVIDERS.some((p) => p.isConfigured());
+  return TEXT_PROVIDERS.some((p) => p.isConfigured());
 }
 
 /** Inspect provider configuration without exposing keys. */
 export function getAIHealth(): AIHealthResult {
-  const providers: AIProviderHealth[] = PROVIDERS.map((p) => {
+  const providers: AIProviderHealth[] = TEXT_PROVIDERS.map((p) => {
     if (p.name === "gemini") {
       const numKeys = [
         process.env.GEMINI_API_KEY_1,
@@ -70,21 +84,23 @@ export function getAIHealth(): AIHealthResult {
 }
 
 /**
- * Run an AI request through the provider chain.
+ * Run an AI request through the appropriate provider chain.
  * Returns the first successful response, or an aggregated error.
  */
 export async function runAIRequest(req: AIRequest): Promise<AIResponse> {
+  const isVision = Boolean(req.image);
+  const providers = isVision ? VISION_PROVIDERS : TEXT_PROVIDERS;
   const errors: string[] = [];
   let attempted = 0;
 
-  for (const provider of PROVIDERS) {
+  for (const provider of providers) {
     if (!provider.isConfigured()) {
       continue;
     }
     attempted++;
 
     console.log(
-      `[ai-chain] Trying ${provider.name}${req.task ? ` for ${req.task}` : ""}${req.image ? " (multimodal)" : ""}`,
+      `[ai-chain] Trying ${provider.name}${req.task ? ` for ${req.task}` : ""}${isVision ? " (vision)" : ""}`,
     );
 
     let res: AIResponse;
@@ -114,8 +130,9 @@ export async function runAIRequest(req: AIRequest): Promise<AIResponse> {
     return {
       ok: false,
       text: "",
-      error:
-        "No AI providers configured. Set GEMINI_API_KEY_*, OPENROUTER_API_KEY, or LLM7_API_KEY.",
+      error: isVision
+        ? "Análise de imagem requer Gemini configurado (GEMINI_API_KEY_*)."
+        : "Nenhum provedor de IA configurado. Defina GEMINI_API_KEY_*, OPENROUTER_API_KEY ou LLM7_API_KEY.",
     };
   }
 

@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { calculateAllTargets } from "@/lib/calculations/nutrition";
 import { estimateWorkoutCalories } from "@/lib/calculations/calories";
@@ -15,6 +14,24 @@ import type {
 } from "@/lib/constants";
 import type { AIDetectedFood } from "@/types/database";
 
+/**
+ * AUTH HANDLING NOTE
+ * ──────────────────
+ * Server actions invoked from client `onSubmit` handlers should NOT call
+ * `redirect()` to handle missing sessions. Doing so throws a NEXT_REDIRECT
+ * sentinel error which the client's `try/catch` swallows as a confusing
+ * generic error.
+ *
+ * Instead we throw a plain `AuthRequiredError` with a clear message. The
+ * client can react by showing a toast and navigating to /login.
+ */
+class AuthRequiredError extends Error {
+  constructor() {
+    super("Sessão expirada. Faça login novamente.");
+    this.name = "AuthRequiredError";
+  }
+}
+
 // ─── Helpers ───────────────────────────────────────────────────
 
 async function ensureUser() {
@@ -24,7 +41,7 @@ async function ensureUser() {
   } = await supabase.auth.getUser();
   if (!user) {
     console.error("[actions:ensureUser] No authenticated user");
-    redirect("/login");
+    throw new AuthRequiredError();
   }
   return { supabase, user };
 }
@@ -56,9 +73,11 @@ async function ensureDay(date: string) {
     .single();
 
   if (insertErr) {
-    // Race condition: another request created it between select and insert
-    // Retry the select
-    console.warn("[actions:ensureDay] Insert conflict, retrying select:", insertErr.message);
+    // Race condition: another request may have created it
+    console.warn(
+      "[actions:ensureDay] Insert conflict, retrying select:",
+      insertErr.message,
+    );
     const { data: retry } = await supabase
       .from("days")
       .select("id")
@@ -69,9 +88,8 @@ async function ensureDay(date: string) {
     if (retry) {
       return { supabase, user, day_id: retry.id as string };
     }
-    // Still no day — throw with clear message
     throw new Error(
-      `Não foi possível criar o registro do dia ${date}. Verifique se o perfil está configurado.`,
+      `Não foi possível criar o registro do dia ${date}. Verifique permissões.`,
     );
   }
 
@@ -140,26 +158,23 @@ export async function updateProfile(formData: FormData) {
     fat_target_g,
   };
 
-  // Try update first
-  const { error: updateErr, count } = await supabase
+  // Upsert is the safest operation: it works whether or not the profile row
+  // already exists (in case the on_auth_user_created trigger didn't fire).
+  const { error: upsertErr } = await supabase
     .from("profiles")
-    .update(updateData)
-    .eq("user_id", user.id);
-
-  if (updateErr) {
-    console.error("[actions:updateProfile] Update failed:", updateErr.message);
-    // If update fails, try upsert (profile row might not exist yet)
-    const { error: upsertErr } = await supabase.from("profiles").upsert(
-      {
-        user_id: user.id,
-        ...updateData,
-      },
+    .upsert(
+      { user_id: user.id, ...updateData },
       { onConflict: "user_id" },
     );
-    if (upsertErr) {
-      console.error("[actions:updateProfile] Upsert also failed:", upsertErr.message);
-      throw new Error("Não foi possível salvar o perfil. Tente novamente.");
-    }
+
+  if (upsertErr) {
+    console.error(
+      "[actions:updateProfile] Upsert failed:",
+      upsertErr.message,
+    );
+    throw new Error(
+      `Não foi possível salvar o perfil: ${upsertErr.message}`,
+    );
   }
 
   revalidatePath("/profile");
@@ -170,18 +185,18 @@ export async function updateTheme(theme: "light" | "dark" | "premium") {
   const { supabase, user } = await ensureUser();
   const { error } = await supabase
     .from("profiles")
-    .update({ theme })
-    .eq("user_id", user.id);
-
-  if (error) {
-    console.error("[actions:updateTheme] Failed:", error.message);
-    // Attempt upsert
-    await supabase.from("profiles").upsert(
+    .upsert(
       { user_id: user.id, theme },
       { onConflict: "user_id" },
     );
+
+  if (error) {
+    console.error("[actions:updateTheme] Failed:", error.message);
+    throw new Error(`Não foi possível salvar o tema: ${error.message}`);
   }
-  revalidatePath("/", "layout");
+  // Targeted revalidation — only the pages that actually display the theme
+  revalidatePath("/profile");
+  revalidatePath("/dashboard");
 }
 
 // ─── MEALS ─────────────────────────────────────────────────────
@@ -225,7 +240,9 @@ export async function addMeal(args: {
 
   if (mealErr) {
     console.error("[actions:addMeal] Meal insert failed:", mealErr.message);
-    throw new Error("Não foi possível salvar a refeição. Tente novamente.");
+    throw new Error(
+      `Não foi possível salvar a refeição: ${mealErr.message}`,
+    );
   }
 
   if (args.entries.length > 0) {
@@ -248,8 +265,14 @@ export async function addMeal(args: {
       .insert(rows);
 
     if (entriesErr) {
-      console.error("[actions:addMeal] Food entries insert failed:", entriesErr.message);
-      // Meal was created but entries failed — don't throw, meal is still valid
+      console.error(
+        "[actions:addMeal] Food entries insert failed:",
+        entriesErr.message,
+      );
+      // Meal was created but entries failed — surface this so user knows
+      throw new Error(
+        `Refeição criada, mas alimentos não salvaram: ${entriesErr.message}`,
+      );
     }
   }
 
@@ -269,7 +292,7 @@ export async function deleteMeal(meal_id: string, date: string) {
 
   if (error) {
     console.error("[actions:deleteMeal] Failed:", error.message);
-    throw new Error("Não foi possível remover a refeição.");
+    throw new Error(`Não foi possível remover a refeição: ${error.message}`);
   }
   revalidatePath("/dashboard");
   revalidatePath(`/history/${date}`);
@@ -285,6 +308,7 @@ export async function deleteFoodEntry(entry_id: string, date: string) {
 
   if (error) {
     console.error("[actions:deleteFoodEntry] Failed:", error.message);
+    throw new Error(`Não foi possível remover o item: ${error.message}`);
   }
   revalidatePath("/dashboard");
   revalidatePath(`/history/${date}`);
@@ -340,7 +364,7 @@ export async function addWorkout(args: {
 
   if (error) {
     console.error("[actions:addWorkout] Insert failed:", error.message);
-    throw new Error("Não foi possível salvar o treino. Tente novamente.");
+    throw new Error(`Não foi possível salvar o treino: ${error.message}`);
   }
 
   revalidatePath("/dashboard");
@@ -358,7 +382,7 @@ export async function deleteWorkout(workout_id: string, date: string) {
 
   if (error) {
     console.error("[actions:deleteWorkout] Failed:", error.message);
-    throw new Error("Não foi possível remover o treino.");
+    throw new Error(`Não foi possível remover o treino: ${error.message}`);
   }
   revalidatePath("/dashboard");
   revalidatePath(`/history/${date}`);
@@ -397,9 +421,9 @@ export async function applyPhotoAnalysis(args: {
     })),
   });
 
-  // Store analysis record — don't fail if this doesn't work
+  // Store analysis record (non-critical — log but don't fail)
   try {
-    await supabase.from("meal_photo_analyses").insert({
+    const { error } = await supabase.from("meal_photo_analyses").insert({
       user_id: user.id,
       meal_id,
       photo_url: args.photo_url ?? "",
@@ -412,8 +436,14 @@ export async function applyPhotoAnalysis(args: {
       summary: args.summary ?? null,
       applied: true,
     });
+    if (error) {
+      console.error(
+        "[actions:applyPhotoAnalysis] Analysis record save failed:",
+        error.message,
+      );
+    }
   } catch (err) {
-    console.error("[actions:applyPhotoAnalysis] Analysis record save failed:", err);
+    console.error("[actions:applyPhotoAnalysis] Unexpected error:", err);
   }
 
   return { meal_id };
@@ -440,6 +470,7 @@ export async function updateDayNotes(args: {
 
   if (error) {
     console.error("[actions:updateDayNotes] Failed:", error.message);
+    throw new Error(`Não foi possível salvar: ${error.message}`);
   }
   revalidatePath(`/history/${args.date}`);
 }

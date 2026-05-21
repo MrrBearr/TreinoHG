@@ -143,9 +143,15 @@ export function PhotoAnalyzer() {
       });
       toast.success("Refeição salva");
       router.push("/dashboard");
-      router.refresh();
     } catch (err) {
-      toast.error("Falha ao salvar", { description: (err as Error).message });
+      console.error("[PhotoAnalyzer] save failed:", err);
+      const msg = (err as Error).message || "";
+      if ((err as Error).name === "AuthRequiredError" || /Sessão expirada/i.test(msg)) {
+        toast.error("Sessão expirada", { description: "Faça login novamente." });
+        router.push("/login");
+        return;
+      }
+      toast.error("Falha ao salvar", { description: msg || "Tente novamente." });
       setSaving(false);
     }
   }
