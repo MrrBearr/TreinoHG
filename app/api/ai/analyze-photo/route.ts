@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { analyzeMealPhoto } from "@/lib/openai/analyze-photo";
+import { isAIConfigured } from "@/lib/openai/client";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -25,7 +26,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "missing_image" }, { status: 400 });
   }
 
-  // Allow either data URLs or http(s) URLs from Supabase Storage
+  // Allow either data URLs or http(s) URLs from Supabase Storage.
   if (
     !body.image.startsWith("data:image") &&
     !body.image.startsWith("http")
@@ -33,9 +34,32 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_image" }, { status: 400 });
   }
 
+  if (!isAIConfigured()) {
+    return NextResponse.json(
+      { error: "ai_unavailable", message: "IA não configurada no servidor." },
+      { status: 503 },
+    );
+  }
+
   try {
     const result = await analyzeMealPhoto(body.image);
-    // Persist a record for history (without applying)
+
+    // analyzeMealPhoto never throws; it returns a fallback shape when the
+    // provider was unavailable or the response was malformed. Surface that
+    // as a 503 so the existing UI error handling kicks in.
+    if (result.fallback) {
+      return NextResponse.json(
+        {
+          error: "ai_failed",
+          message:
+            result.summary ||
+            "Falha ao analisar a foto. Tente novamente.",
+        },
+        { status: 503 },
+      );
+    }
+
+    // Persist a record for history (without applying).
     await supabase.from("meal_photo_analyses").insert({
       user_id: user.id,
       photo_url: body.image.startsWith("http") ? body.image : "",
@@ -51,10 +75,10 @@ export async function POST(req: Request) {
     });
     return NextResponse.json(result);
   } catch (err) {
-    console.error("analyze-photo error", err);
+    console.error("analyze-photo route error", err);
     return NextResponse.json(
-      { error: "ai_failed", message: (err as Error).message },
-      { status: 500 },
+      { error: "ai_failed", message: "Falha ao analisar a foto." },
+      { status: 503 },
     );
   }
 }

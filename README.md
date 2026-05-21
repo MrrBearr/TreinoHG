@@ -26,7 +26,7 @@ Premium mobile-first calorie & workout tracker. Built with Next.js 14, Supabase,
 | Styling | Tailwind CSS + CSS variables for theming |
 | UI primitives | Radix UI + shadcn-style components |
 | Database & Auth | Supabase (Postgres + RLS + Storage) |
-| AI | OpenAI (`gpt-4o` for vision, `gpt-4o-mini` for text) |
+| AI | OpenAI-compatible provider (default: FreeModel.dev, `gpt-5.5`) — works with any OpenAI-compatible endpoint |
 | Charts | Recharts |
 | Forms / Toasts | Sonner |
 | Theming | next-themes |
@@ -87,13 +87,24 @@ npm install
 Copy `.env.example` to `.env.local` and fill in:
 
 ```bash
-NEXT_PUBLIC_SUPABASE_URL=...
-NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-OPENAI_API_KEY=sk-...
-OPENAI_VISION_MODEL=gpt-4o
-OPENAI_MODEL=gpt-4o-mini
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=https://wtsdlfjtfromgtfeormn.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SUPABASE_SERVICE_ROLE_KEY
+
+# AI provider (OpenAI-compatible)
+OPENAI_API_KEY=YOUR_FREEMODEL_API_KEY
+OPENAI_BASE_URL=https://api.freemodel.dev/v1
+OPENAI_MODEL=gpt-5.5
+
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
+
+The AI provider is fully OpenAI-compatible. Swap `OPENAI_BASE_URL` to
+`https://api.openai.com/v1` (and `OPENAI_MODEL` to e.g. `gpt-4o`) to use
+OpenAI directly — no other code changes required. All AI requests run
+server-side from `app/api/ai/*` so the API key is never exposed to the
+browser.
 
 ### 3. Apply database schema
 

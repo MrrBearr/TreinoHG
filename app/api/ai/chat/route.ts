@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { answerCoachQuestion } from "@/lib/openai/insights";
+import { isAIConfigured } from "@/lib/openai/client";
 import { getDaySummary, getProfile } from "@/lib/queries";
 import { toDateKey } from "@/lib/utils";
 
@@ -28,13 +29,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "empty_question" }, { status: 400 });
   }
 
+  if (!isAIConfigured()) {
+    return NextResponse.json(
+      { error: "ai_unavailable", message: "IA não configurada no servidor." },
+      { status: 503 },
+    );
+  }
+
   const [profile, summary] = await Promise.all([
     getProfile(),
     getDaySummary(toDateKey()),
   ]);
 
   try {
-    const answer = await answerCoachQuestion(
+    const result = await answerCoachQuestion(
       question,
       profile?.calorie_target
         ? {
@@ -51,19 +59,32 @@ export async function POST(req: Request) {
         : undefined,
     );
 
+    if (!result.ok || !result.content) {
+      return NextResponse.json(
+        {
+          error: "ai_failed",
+          message:
+            result.reason === "unavailable"
+              ? "IA indisponível no momento."
+              : "Falha ao responder.",
+        },
+        { status: 503 },
+      );
+    }
+
     await supabase.from("ai_messages").insert({
       user_id: user.id,
       kind: "answer",
-      content: answer,
+      content: result.content,
       context: { question } as unknown as object,
     });
 
-    return NextResponse.json({ answer });
+    return NextResponse.json({ answer: result.content });
   } catch (err) {
-    console.error("chat error", err);
+    console.error("chat route error", err);
     return NextResponse.json(
-      { error: "ai_failed", message: (err as Error).message },
-      { status: 500 },
+      { error: "ai_failed", message: "Falha ao responder." },
+      { status: 503 },
     );
   }
 }
