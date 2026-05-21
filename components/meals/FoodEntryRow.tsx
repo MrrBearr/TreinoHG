@@ -107,15 +107,25 @@ export function FoodEntryRow({
           signal: controller.signal,
         });
 
+        const json = await res.json().catch(() => ({}));
+
         if (!res.ok) {
+          console.error(
+            `[estimate-food] HTTP ${res.status}:`,
+            json.message || json.error || "(no body)",
+          );
           setErrored(true);
           return;
         }
 
-        const json: { foods?: EstimatedFood[] } = await res.json();
-        const foods = Array.isArray(json.foods) ? json.foods : [];
+        const foods: EstimatedFood[] = Array.isArray(json.foods)
+          ? json.foods
+          : [];
         if (foods.length === 0) {
-          if (manual) setErrored(true);
+          if (manual) {
+            console.warn("[estimate-food] No foods returned for:", query);
+            setErrored(true);
+          }
           return;
         }
 
@@ -152,6 +162,7 @@ export function FoodEntryRow({
         });
       } catch (err) {
         if ((err as Error)?.name === "AbortError") return;
+        console.error("[estimate-food] Request failed:", err);
         setErrored(true);
       } finally {
         setLoading(false);

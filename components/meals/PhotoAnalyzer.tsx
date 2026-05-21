@@ -61,6 +61,9 @@ export function PhotoAnalyzer() {
     setStep("analyzing");
     setErrorMsg("");
     try {
+      console.log(
+        `[analyze-photo] Sending image (size=${imageData.length} bytes)`,
+      );
       const res = await fetch("/api/ai/analyze-photo", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -68,11 +71,20 @@ export function PhotoAnalyzer() {
       });
 
       const json = await res.json().catch(() => ({}));
+      console.log(
+        `[analyze-photo] Response: HTTP ${res.status}`,
+        json.error
+          ? { error: json.error, message: json.message }
+          : { foods: json.foods?.length ?? 0, kcal: json.total_calories },
+      );
 
       if (!res.ok || json.fallback || json.error) {
-        setErrorMsg(
-          json.message || json.summary || "Não foi possível analisar a foto.",
-        );
+        const msg =
+          json.message ||
+          json.summary ||
+          `Erro HTTP ${res.status}. Verifique a configuração da IA.`;
+        console.error("[analyze-photo] Failed:", msg);
+        setErrorMsg(msg);
         setStep("error");
         return;
       }
@@ -82,7 +94,10 @@ export function PhotoAnalyzer() {
       setFoods(analysisResult.foods ?? []);
       setStep("review");
     } catch (err) {
-      setErrorMsg((err as Error).message || "Erro de conexão.");
+      console.error("[analyze-photo] Network/unexpected error:", err);
+      setErrorMsg(
+        (err as Error).message || "Erro de conexão. Tente novamente.",
+      );
       setStep("error");
     }
   }

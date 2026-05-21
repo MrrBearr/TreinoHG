@@ -4,6 +4,8 @@
  * Designed for the free tier: rotates between up to 3 API keys,
  * handles rate limits, quota exhaustion, and timeouts gracefully.
  * All requests are server-side only.
+ *
+ * Reference: https://ai.google.dev/api/generate-content
  */
 
 import type { GeminiConfig } from "./types";
@@ -35,6 +37,14 @@ export interface GeminiResponse {
   text: string;
   error?: string;
   keyIndex?: number;
+  modelUsed?: string;
+}
+
+export interface GeminiHealthResult {
+  configured: boolean;
+  numKeys: number;
+  primaryModel: string;
+  fastModel: string;
 }
 
 function getConfig(): GeminiConfig {
@@ -42,9 +52,9 @@ function getConfig(): GeminiConfig {
   const k1 = process.env.GEMINI_API_KEY_1;
   const k2 = process.env.GEMINI_API_KEY_2;
   const k3 = process.env.GEMINI_API_KEY_3;
-  if (k1) keys.push(k1);
-  if (k2) keys.push(k2);
-  if (k3) keys.push(k3);
+  if (k1 && k1.length > 10) keys.push(k1);
+  if (k2 && k2.length > 10) keys.push(k2);
+  if (k3 && k3.length > 10) keys.push(k3);
 
   return {
     keys,
@@ -58,6 +68,17 @@ function getConfig(): GeminiConfig {
 /** Check if any Gemini key is configured */
 export function isGeminiConfigured(): boolean {
   return getConfig().keys.length > 0;
+}
+
+/** Diagnostic helper: returns config without exposing keys */
+export function getGeminiHealth(): GeminiHealthResult {
+  const config = getConfig();
+  return {
+    configured: config.keys.length > 0,
+    numKeys: config.keys.length,
+    primaryModel: config.primaryModel,
+    fastModel: config.fastModel,
+  };
 }
 
 /** Track which key to try first (rotates on failure) */
@@ -79,13 +100,24 @@ export async function callGemini(req: GeminiRequest): Promise<GeminiResponse> {
   const config = getConfig();
 
   if (config.keys.length === 0) {
-    return { ok: false, text: "", error: "No Gemini API keys configured" };
+    console.error("[gemini] No API keys configured. Set GEMINI_API_KEY_1/2/3.");
+    return {
+      ok: false,
+      text: "",
+      error: "No Gemini API keys configured",
+    };
   }
 
   const modelName =
     req.model === "primary" ? config.primaryModel : config.fastModel;
 
-  // Build request body according to Gemini REST API spec
+  // Detect multimodal request (has at least one image part)
+  const hasImage = req.contents.some((msg) =>
+    msg.parts.some((p) => "inlineData" in p),
+  );
+
+  // Build request body. Gemini REST API uses camelCase consistently.
+  // Reference: https://ai.google.dev/api/generate-content#request-body
   const requestBody: Record<string, unknown> = {
     contents: req.contents,
     generationConfig: {
@@ -94,24 +126,29 @@ export async function callGemini(req: GeminiRequest): Promise<GeminiResponse> {
     },
   };
 
-  // Only add responseMimeType for text-only requests (no images).
-  // Multimodal requests with responseMimeType can fail on some models.
-  const hasImage = req.contents.some((msg) =>
-    msg.parts.some((p) => "inlineData" in p),
-  );
+  // responseMimeType only works for text-only requests on most models.
+  // For multimodal (image) requests, we omit it and rely on prompt
+  // engineering to get JSON output.
   if (req.generationConfig?.responseMimeType && !hasImage) {
     (requestBody.generationConfig as Record<string, unknown>).responseMimeType =
       req.generationConfig.responseMimeType;
   }
 
+  // CRITICAL: The REST API expects systemInstruction in camelCase.
+  // Snake_case (system_instruction) is for the Python SDK only.
   if (req.systemInstruction) {
-    requestBody.system_instruction = {
+    requestBody.systemInstruction = {
       parts: [{ text: req.systemInstruction }],
     };
   }
 
   const startIdx = currentKeyIndex % config.keys.length;
   const keysToTry = config.keys.length;
+  const errors: string[] = [];
+
+  console.log(
+    `[gemini] Calling ${modelName} (${hasImage ? "multimodal" : "text"}, ${config.keys.length} keys)`,
+  );
 
   for (let attempt = 0; attempt < keysToTry; attempt++) {
     const idx = (startIdx + attempt) % config.keys.length;
@@ -133,18 +170,20 @@ export async function callGemini(req: GeminiRequest): Promise<GeminiResponse> {
 
       if (!response.ok) {
         const errBody = await response.text().catch(() => "");
-        console.error(
-          `[gemini] Key ${idx + 1} failed (${response.status}):`,
-          errBody.slice(0, 300),
-        );
+        const errMsg = `[gemini] Key ${idx + 1} failed (${response.status}): ${errBody.slice(0, 300)}`;
+        console.error(errMsg);
+        errors.push(`key${idx + 1}:${response.status}`);
+
         if (isRetryableError(response.status, errBody)) {
           continue;
         }
+        // Non-retryable error — return immediately so caller sees the actual cause
         return {
           ok: false,
           text: "",
-          error: `Gemini error ${response.status}: ${errBody.slice(0, 200)}`,
+          error: `Gemini ${response.status}: ${errBody.slice(0, 200)}`,
           keyIndex: idx,
+          modelUsed: modelName,
         };
       }
 
@@ -162,35 +201,41 @@ export async function callGemini(req: GeminiRequest): Promise<GeminiResponse> {
 
       if (!text) {
         const finishReason = json?.candidates?.[0]?.finishReason;
+        const safetyRatings = json?.candidates?.[0]?.safetyRatings;
         console.warn(
-          `[gemini] Key ${idx + 1} returned empty (finishReason: ${finishReason})`,
+          `[gemini] Key ${idx + 1} empty response (finishReason: ${finishReason})`,
+          safetyRatings ? { safetyRatings } : "",
         );
-        // Content filtering or safety block — try next key
+        errors.push(`key${idx + 1}:empty(${finishReason})`);
+
         if (finishReason === "SAFETY" || finishReason === "RECITATION") {
           continue;
         }
-        // Other empty responses — still try next
+        // Other empty responses — try next
         continue;
       }
 
-      // Success — remember this key
+      // Success
       currentKeyIndex = idx;
-      return { ok: true, text, keyIndex: idx };
+      console.log(
+        `[gemini] Key ${idx + 1} succeeded (${text.length} chars)`,
+      );
+      return { ok: true, text, keyIndex: idx, modelUsed: modelName };
     } catch (err) {
       const isTimeout = err instanceof Error && err.name === "AbortError";
-      console.warn(
-        `[gemini] Key ${idx + 1} ${isTimeout ? "timeout" : "network error"}:`,
-        (err as Error).message,
-      );
+      const errMsg = `[gemini] Key ${idx + 1} ${isTimeout ? "timeout" : "network error"}: ${(err as Error).message}`;
+      console.error(errMsg);
+      errors.push(`key${idx + 1}:${isTimeout ? "timeout" : "network"}`);
       continue;
     }
   }
 
-  // All keys exhausted
+  // All keys exhausted — rotate so next call starts at next key
   currentKeyIndex = (currentKeyIndex + 1) % config.keys.length;
   return {
     ok: false,
     text: "",
-    error: "All Gemini API keys exhausted or failed",
+    error: `All Gemini keys failed: ${errors.join(", ")}`,
+    modelUsed: modelName,
   };
 }

@@ -20,7 +20,7 @@ import {
   PHOTO_ANALYSIS_PROMPT,
 } from "./prompts";
 
-export { isGeminiConfigured } from "./gemini-client";
+export { isGeminiConfigured, getGeminiHealth, callGemini } from "./gemini-client";
 export type {
   AIEstimateResult,
   AITextResult,
@@ -94,6 +94,7 @@ export async function estimateFoods(
     return { ok: true, foods: [] };
   }
   if (!isGeminiConfigured()) {
+    console.error("[ai:estimateFoods] Gemini not configured");
     return { ok: false, foods: [], reason: "unavailable" };
   }
 
@@ -115,7 +116,10 @@ export async function estimateFoods(
 
   const parsed = extractJson<{ foods?: unknown[] }>(res.text);
   if (!parsed || !Array.isArray(parsed.foods)) {
-    console.error("[ai:estimateFoods] Failed to parse JSON from:", res.text.slice(0, 200));
+    console.error(
+      "[ai:estimateFoods] Failed to parse JSON from:",
+      res.text.slice(0, 200),
+    );
     return { ok: false, foods: [], reason: "failed" };
   }
 
@@ -124,6 +128,7 @@ export async function estimateFoods(
     .map(sanitizeFood)
     .filter((f) => f.name && f.calories > 0);
 
+  console.log(`[ai:estimateFoods] Returned ${foods.length} food(s) for "${trimmed}"`);
   return { ok: true, foods };
 }
 
@@ -133,9 +138,7 @@ export async function estimateFoods(
  * Analyze a meal photo. Accepts either:
  *  - A full data URL: "data:image/jpeg;base64,/9j/4AAQ..."
  *  - Raw base64 string (no prefix)
- *
- * The function strips the data URL prefix, validates the base64 data,
- * and sends it to Gemini as inlineData.
+ *  - HTTP(S) URL (will be fetched + converted)
  */
 export async function analyzeMealPhoto(
   imageInput: string,
@@ -153,51 +156,49 @@ export async function analyzeMealPhoto(
   });
 
   if (!isGeminiConfigured()) {
+    console.error("[ai:analyzeMealPhoto] Gemini not configured");
     return emptyResult("IA indisponível. Adicione os alimentos manualmente.");
   }
 
-  // Extract pure base64 data from data URL
+  // Extract pure base64 data
   let base64Data: string;
   if (imageInput.startsWith("data:")) {
     const commaIdx = imageInput.indexOf(",");
     if (commaIdx === -1) {
+      console.error("[ai:analyzeMealPhoto] Malformed data URL");
       return emptyResult("Formato de imagem inválido.");
     }
     base64Data = imageInput.slice(commaIdx + 1);
 
-    // Extract mime type from data URL if not explicitly provided
     const mimeMatch = imageInput.match(/^data:(image\/[^;]+);/);
-    if (mimeMatch) {
-      mimeType = mimeMatch[1];
-    }
+    if (mimeMatch) mimeType = mimeMatch[1];
   } else if (imageInput.startsWith("http")) {
-    // For HTTP URLs, we need to fetch and convert to base64
     try {
       const response = await fetch(imageInput);
       if (!response.ok) {
+        console.error(
+          `[ai:analyzeMealPhoto] Failed to fetch URL: ${response.status}`,
+        );
         return emptyResult("Não foi possível baixar a imagem.");
       }
       const arrayBuffer = await response.arrayBuffer();
       base64Data = Buffer.from(arrayBuffer).toString("base64");
       const contentType = response.headers.get("content-type");
-      if (contentType?.startsWith("image/")) {
-        mimeType = contentType;
-      }
+      if (contentType?.startsWith("image/")) mimeType = contentType;
     } catch (err) {
       console.error("[ai:analyzeMealPhoto] Failed to fetch image URL:", err);
       return emptyResult("Falha ao acessar a imagem.");
     }
   } else {
-    // Assume raw base64
     base64Data = imageInput;
   }
 
-  // Validate base64 has content (at minimum a few hundred bytes for any real image)
   if (!base64Data || base64Data.length < 100) {
+    console.error("[ai:analyzeMealPhoto] Image data too small:", base64Data.length);
     return emptyResult("Imagem muito pequena ou inválida.");
   }
 
-  // Remove any whitespace/newlines that might be in the base64
+  // Strip whitespace from base64
   base64Data = base64Data.replace(/\s/g, "");
 
   console.log(
@@ -212,32 +213,27 @@ export async function analyzeMealPhoto(
         {
           role: "user",
           parts: [
-            { text: "Analise esta refeição na foto e retorne o JSON estruturado com os alimentos, calorias e macros." },
             {
-              inlineData: {
-                mimeType,
-                data: base64Data,
-              },
+              text: "Analise esta refeição na foto e retorne o JSON estruturado com os alimentos, calorias e macros.",
             },
+            { inlineData: { mimeType, data: base64Data } },
           ],
         },
       ],
-      generationConfig: {
-        temperature: 0.2,
-        maxOutputTokens: 1500,
-        // NOTE: responseMimeType is intentionally NOT set for multimodal requests
-        // as it can cause failures with image inputs on some Gemini models
-      },
+      generationConfig: { temperature: 0.2, maxOutputTokens: 1500 },
     });
 
     if (!res.ok) {
       console.error("[ai:analyzeMealPhoto] Gemini call failed:", res.error);
       return emptyResult(
-        "Falha ao analisar a foto. Tente novamente ou adicione manualmente.",
+        `Falha ao analisar a foto. ${res.error ?? "Tente novamente."}`,
       );
     }
 
-    console.log("[ai:analyzeMealPhoto] Raw response:", res.text.slice(0, 300));
+    console.log(
+      "[ai:analyzeMealPhoto] Raw response (first 300 chars):",
+      res.text.slice(0, 300),
+    );
 
     const parsed = extractJson<Partial<PhotoAnalysisResult>>(res.text);
     if (!parsed) {
@@ -272,6 +268,7 @@ export async function analyzeMealPhoto(
 
 export async function generateInsight(context: string): Promise<AITextResult> {
   if (!isGeminiConfigured()) {
+    console.error("[ai:generateInsight] Gemini not configured");
     return { ok: false, content: "", reason: "unavailable" };
   }
 
@@ -282,7 +279,10 @@ export async function generateInsight(context: string): Promise<AITextResult> {
     generationConfig: { temperature: 0.7, maxOutputTokens: 200 },
   });
 
-  if (!res.ok) return { ok: false, content: "", reason: "failed" };
+  if (!res.ok) {
+    console.error("[ai:generateInsight] Gemini failed:", res.error);
+    return { ok: false, content: "", reason: "failed" };
+  }
   return { ok: true, content: res.text.trim() };
 }
 
@@ -291,6 +291,7 @@ export async function answerCoach(
   context?: string,
 ): Promise<AITextResult> {
   if (!isGeminiConfigured()) {
+    console.error("[ai:answerCoach] Gemini not configured");
     return { ok: false, content: "", reason: "unavailable" };
   }
 
@@ -305,7 +306,10 @@ export async function answerCoach(
     generationConfig: { temperature: 0.7, maxOutputTokens: 300 },
   });
 
-  if (!res.ok) return { ok: false, content: "", reason: "failed" };
+  if (!res.ok) {
+    console.error("[ai:answerCoach] Gemini failed:", res.error);
+    return { ok: false, content: "", reason: "failed" };
+  }
   return { ok: true, content: res.text.trim() };
 }
 
@@ -326,6 +330,9 @@ export async function generateMotivation(goal?: string): Promise<AITextResult> {
     generationConfig: { temperature: 0.9, maxOutputTokens: 60 },
   });
 
-  if (!res.ok) return { ok: false, content: "", reason: "failed" };
+  if (!res.ok) {
+    console.error("[ai:generateMotivation] Gemini failed:", res.error);
+    return { ok: false, content: "", reason: "failed" };
+  }
   return { ok: true, content: res.text.trim().replace(/^["']|["']$/g, "") };
 }

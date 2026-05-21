@@ -9,13 +9,13 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/ai/analyze-photo
  * Body: { image: string (base64 data URL or http URL) }
- * Returns: PhotoAnalysisResult
+ * Returns: PhotoAnalysisResult | { error, message, details? }
  *
  * Analyzes a meal photo using Gemini Vision. Never auto-saves —
  * user must confirm before persisting.
  */
 export async function POST(req: Request) {
-  // Auth check
+  // Auth check (using same supabase client throughout for shared session)
   const supabase = createClient();
   let userId: string;
   try {
@@ -23,6 +23,7 @@ export async function POST(req: Request) {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
+      console.warn("[analyze-photo] No user — returning 401");
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
     userId = user.id;
@@ -51,8 +52,12 @@ export async function POST(req: Request) {
   }
 
   if (!isGeminiConfigured()) {
+    console.error("[analyze-photo] Gemini not configured");
     return NextResponse.json(
-      { error: "ai_unavailable", message: "IA não configurada." },
+      {
+        error: "ai_unavailable",
+        message: "IA não configurada no servidor.",
+      },
       { status: 503 },
     );
   }
@@ -62,10 +67,15 @@ export async function POST(req: Request) {
   const mimeMatch = body.image.match(/^data:(image\/[^;]+);/);
   if (mimeMatch) mimeType = mimeMatch[1];
 
+  console.log(
+    `[analyze-photo] Analyzing image (mime=${mimeType}, size=${body.image.length} bytes)`,
+  );
+
   // Call Gemini
   const result = await analyzeMealPhoto(body.image, mimeType);
 
   if (result.fallback) {
+    console.error("[analyze-photo] AI returned fallback:", result.summary);
     return NextResponse.json(
       {
         error: "ai_failed",
@@ -76,7 +86,11 @@ export async function POST(req: Request) {
     );
   }
 
-  // Store analysis record (non-blocking — don't fail if this doesn't work)
+  console.log(
+    `[analyze-photo] Success: ${result.foods.length} foods, ${result.total_calories} kcal`,
+  );
+
+  // Store analysis record (non-blocking)
   try {
     const { error: insertErr } = await supabase
       .from("meal_photo_analyses")
@@ -94,10 +108,13 @@ export async function POST(req: Request) {
         applied: false,
       });
     if (insertErr) {
-      console.error("[analyze-photo] Failed to save analysis:", insertErr.message);
+      console.error(
+        "[analyze-photo] Failed to save analysis record:",
+        insertErr.message,
+      );
     }
   } catch (err) {
-    console.error("[analyze-photo] Failed to persist analysis record:", err);
+    console.error("[analyze-photo] Failed to persist analysis:", err);
   }
 
   return NextResponse.json(result);
