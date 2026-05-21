@@ -1,11 +1,13 @@
 /**
  * Central AI module for TreinoHG.
  *
- * All AI functionality goes through here. Uses Gemini with multi-key
- * failover. Every function returns a safe result — never throws.
+ * Routes every AI call through the multi-provider chain:
+ *   Gemini → OpenRouter → LLM7
+ *
+ * Every exported function returns a safe result — never throws.
  */
 
-import { callGemini, isGeminiConfigured } from "./gemini-client";
+import { runAIRequest } from "./providers/chain";
 import type {
   AIEstimateResult,
   AITextResult,
@@ -20,15 +22,23 @@ import {
   PHOTO_ANALYSIS_PROMPT,
 } from "./prompts";
 
+// ─── Re-exports ────────────────────────────────────────────────
+
+export { isAIConfigured, getAIHealth, runAIRequest } from "./providers/chain";
+
+// Backward compat — some routes still import these names.
 export { isGeminiConfigured, getGeminiHealth, callGemini } from "./gemini-client";
+
 export type {
   AIEstimateResult,
   AITextResult,
   EstimatedFood,
   PhotoAnalysisResult,
+  AIHealthResult,
+  AIProviderName,
 } from "./types";
 
-// ─── JSON Parsing ──────────────────────────────────────────────
+// ─── JSON parsing helpers ──────────────────────────────────────
 
 function extractJson<T = unknown>(raw: string): T | null {
   if (!raw) return null;
@@ -84,6 +94,8 @@ function sanitizeFood(f: unknown): EstimatedFood {
   };
 }
 
+import { isAIConfigured as _isAIConfigured } from "./providers/chain";
+
 // ─── Food Estimation (text) ────────────────────────────────────
 
 export async function estimateFoods(
@@ -93,24 +105,22 @@ export async function estimateFoods(
   if (!trimmed || trimmed.length < 2) {
     return { ok: true, foods: [] };
   }
-  if (!isGeminiConfigured()) {
-    console.error("[ai:estimateFoods] Gemini not configured");
+  if (!_isAIConfigured()) {
+    console.error("[ai:estimateFoods] No providers configured");
     return { ok: false, foods: [], reason: "unavailable" };
   }
 
-  const res = await callGemini({
-    model: "fast",
+  const res = await runAIRequest({
     systemInstruction: ESTIMATE_FOOD_PROMPT,
-    contents: [{ role: "user", parts: [{ text: trimmed }] }],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 800,
-      responseMimeType: "application/json",
-    },
+    userText: trimmed,
+    temperature: 0.2,
+    maxOutputTokens: 800,
+    jsonMode: true,
+    task: "estimate_food",
   });
 
   if (!res.ok) {
-    console.error("[ai:estimateFoods] Gemini failed:", res.error);
+    console.error("[ai:estimateFoods] Chain failed:", res.error);
     return { ok: false, foods: [], reason: "failed" };
   }
 
@@ -128,8 +138,10 @@ export async function estimateFoods(
     .map(sanitizeFood)
     .filter((f) => f.name && f.calories > 0);
 
-  console.log(`[ai:estimateFoods] Returned ${foods.length} food(s) for "${trimmed}"`);
-  return { ok: true, foods };
+  console.log(
+    `[ai:estimateFoods] Returned ${foods.length} food(s) for "${trimmed}" via ${res.providerUsed}`,
+  );
+  return { ok: true, foods, providerUsed: res.providerUsed };
 }
 
 // ─── Photo Analysis ────────────────────────────────────────────
@@ -155,8 +167,8 @@ export async function analyzeMealPhoto(
     fallback: true,
   });
 
-  if (!isGeminiConfigured()) {
-    console.error("[ai:analyzeMealPhoto] Gemini not configured");
+  if (!_isAIConfigured()) {
+    console.error("[ai:analyzeMealPhoto] No providers configured");
     return emptyResult("IA indisponível. Adicione os alimentos manualmente.");
   }
 
@@ -206,32 +218,26 @@ export async function analyzeMealPhoto(
   );
 
   try {
-    const res = await callGemini({
-      model: "primary",
+    const res = await runAIRequest({
       systemInstruction: PHOTO_ANALYSIS_PROMPT,
-      contents: [
-        {
-          role: "user",
-          parts: [
-            {
-              text: "Analise esta refeição na foto e retorne o JSON estruturado com os alimentos, calorias e macros.",
-            },
-            { inlineData: { mimeType, data: base64Data } },
-          ],
-        },
-      ],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 1500 },
+      userText:
+        "Analise esta refeição na foto e retorne o JSON estruturado com os alimentos, calorias e macros.",
+      image: { mimeType, base64: base64Data },
+      temperature: 0.2,
+      maxOutputTokens: 1500,
+      task: "analyze_photo",
+      // jsonMode is intentionally OFF for multimodal — providers reject it
     });
 
     if (!res.ok) {
-      console.error("[ai:analyzeMealPhoto] Gemini call failed:", res.error);
+      console.error("[ai:analyzeMealPhoto] Chain failed:", res.error);
       return emptyResult(
         `Falha ao analisar a foto. ${res.error ?? "Tente novamente."}`,
       );
     }
 
     console.log(
-      "[ai:analyzeMealPhoto] Raw response (first 300 chars):",
+      `[ai:analyzeMealPhoto] Raw response from ${res.providerUsed} (first 300 chars):`,
       res.text.slice(0, 300),
     );
 
@@ -257,6 +263,7 @@ export async function analyzeMealPhoto(
       confidence: Math.min(1, Math.max(0, Number(parsed.confidence) || 0)),
       summary: String(parsed.summary ?? ""),
       fallback: false,
+      providerUsed: res.providerUsed,
     };
   } catch (err) {
     console.error("[ai:analyzeMealPhoto] Unexpected error:", err);
@@ -267,31 +274,36 @@ export async function analyzeMealPhoto(
 // ─── Text AI (insights, chat, motivation) ──────────────────────
 
 export async function generateInsight(context: string): Promise<AITextResult> {
-  if (!isGeminiConfigured()) {
-    console.error("[ai:generateInsight] Gemini not configured");
+  if (!_isAIConfigured()) {
+    console.error("[ai:generateInsight] No providers configured");
     return { ok: false, content: "", reason: "unavailable" };
   }
 
-  const res = await callGemini({
-    model: "fast",
+  const res = await runAIRequest({
     systemInstruction: INSIGHT_PROMPT,
-    contents: [{ role: "user", parts: [{ text: context }] }],
-    generationConfig: { temperature: 0.7, maxOutputTokens: 200 },
+    userText: context,
+    temperature: 0.7,
+    maxOutputTokens: 200,
+    task: "insight",
   });
 
   if (!res.ok) {
-    console.error("[ai:generateInsight] Gemini failed:", res.error);
+    console.error("[ai:generateInsight] Chain failed:", res.error);
     return { ok: false, content: "", reason: "failed" };
   }
-  return { ok: true, content: res.text.trim() };
+  return {
+    ok: true,
+    content: res.text.trim(),
+    providerUsed: res.providerUsed,
+  };
 }
 
 export async function answerCoach(
   question: string,
   context?: string,
 ): Promise<AITextResult> {
-  if (!isGeminiConfigured()) {
-    console.error("[ai:answerCoach] Gemini not configured");
+  if (!_isAIConfigured()) {
+    console.error("[ai:answerCoach] No providers configured");
     return { ok: false, content: "", reason: "unavailable" };
   }
 
@@ -299,40 +311,45 @@ export async function answerCoach(
     ? `${CHAT_PROMPT}\n\nContexto do usuário:\n${context}`
     : CHAT_PROMPT;
 
-  const res = await callGemini({
-    model: "fast",
+  const res = await runAIRequest({
     systemInstruction: systemPrompt,
-    contents: [{ role: "user", parts: [{ text: question }] }],
-    generationConfig: { temperature: 0.7, maxOutputTokens: 300 },
+    userText: question,
+    temperature: 0.7,
+    maxOutputTokens: 300,
+    task: "chat",
   });
 
   if (!res.ok) {
-    console.error("[ai:answerCoach] Gemini failed:", res.error);
+    console.error("[ai:answerCoach] Chain failed:", res.error);
     return { ok: false, content: "", reason: "failed" };
   }
-  return { ok: true, content: res.text.trim() };
+  return {
+    ok: true,
+    content: res.text.trim(),
+    providerUsed: res.providerUsed,
+  };
 }
 
 export async function generateMotivation(goal?: string): Promise<AITextResult> {
-  if (!isGeminiConfigured()) {
+  if (!_isAIConfigured()) {
     return { ok: false, content: "", reason: "unavailable" };
   }
 
-  const res = await callGemini({
-    model: "fast",
+  const res = await runAIRequest({
     systemInstruction: MOTIVATION_PROMPT,
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: `Objetivo: ${goal ?? "performance"}. Gere a frase.` }],
-      },
-    ],
-    generationConfig: { temperature: 0.9, maxOutputTokens: 60 },
+    userText: `Objetivo: ${goal ?? "performance"}. Gere a frase.`,
+    temperature: 0.9,
+    maxOutputTokens: 60,
+    task: "motivation",
   });
 
   if (!res.ok) {
-    console.error("[ai:generateMotivation] Gemini failed:", res.error);
+    console.error("[ai:generateMotivation] Chain failed:", res.error);
     return { ok: false, content: "", reason: "failed" };
   }
-  return { ok: true, content: res.text.trim().replace(/^["']|["']$/g, "") };
+  return {
+    ok: true,
+    content: res.text.trim().replace(/^["']|["']$/g, ""),
+    providerUsed: res.providerUsed,
+  };
 }
