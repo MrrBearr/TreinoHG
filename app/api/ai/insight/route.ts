@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateDayInsight } from "@/lib/openai/insights";
+import { isAIConfigured } from "@/lib/openai/client";
 import { getDaySummary, getProfile } from "@/lib/queries";
 import { toDateKey } from "@/lib/utils";
 
@@ -24,7 +25,7 @@ export async function GET(req: Request) {
     getDaySummary(date),
   ]);
 
-  // If no calorie target yet, return a minimal informational message
+  // If no calorie target yet, return a minimal informational message.
   if (!profile?.calorie_target) {
     return NextResponse.json({
       insight:
@@ -33,7 +34,15 @@ export async function GET(req: Request) {
     });
   }
 
-  // Use cache: if we already have an insight for this day generated within last 2h, reuse
+  // Fail soft if the AI provider is not configured.
+  if (!isAIConfigured()) {
+    return NextResponse.json(
+      { error: "ai_unavailable", message: "IA não configurada no servidor." },
+      { status: 503 },
+    );
+  }
+
+  // Cache: reuse insights generated within the last 2 hours for the same day.
   const twoHoursAgo = new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString();
   const { data: cached } = await supabase
     .from("ai_messages")
@@ -51,7 +60,7 @@ export async function GET(req: Request) {
   }
 
   try {
-    const insight = await generateDayInsight({
+    const result = await generateDayInsight({
       profile: {
         goal: profile.goal,
         calorie_target: profile.calorie_target,
@@ -63,22 +72,33 @@ export async function GET(req: Request) {
       summary,
     });
 
-    if (insight) {
-      await supabase.from("ai_messages").insert({
-        user_id: user.id,
-        date,
-        kind: "insight",
-        content: insight,
-        context: summary as unknown as object,
-      });
+    if (!result.ok || !result.content) {
+      return NextResponse.json(
+        {
+          error: "ai_failed",
+          message:
+            result.reason === "unavailable"
+              ? "IA indisponível no momento."
+              : "Falha ao gerar insight.",
+        },
+        { status: 503 },
+      );
     }
 
-    return NextResponse.json({ insight, cached: false });
+    await supabase.from("ai_messages").insert({
+      user_id: user.id,
+      date,
+      kind: "insight",
+      content: result.content,
+      context: summary as unknown as object,
+    });
+
+    return NextResponse.json({ insight: result.content, cached: false });
   } catch (err) {
-    console.error("insight error", err);
+    console.error("insight route error", err);
     return NextResponse.json(
-      { error: "ai_failed", message: (err as Error).message },
-      { status: 500 },
+      { error: "ai_failed", message: "Falha ao gerar insight." },
+      { status: 503 },
     );
   }
 }
