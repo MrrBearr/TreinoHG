@@ -4,6 +4,14 @@ import { FAB } from "@/components/layout/FAB";
 import { ThemeSync } from "@/components/layout/ThemeSync";
 import { createClient } from "@/lib/supabase/server";
 
+/**
+ * The (app) group is fully authenticated. Every page reads cookies/session
+ * via Supabase, so it MUST be dynamically rendered. Setting this on the
+ * layout propagates to every child route in the group.
+ */
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export default async function AppLayout({
   children,
 }: {

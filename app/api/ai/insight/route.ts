@@ -6,6 +6,7 @@ import { toDateKey } from "@/lib/utils";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
+export const dynamic = "force-dynamic";
 
 /**
  * GET /api/ai/insight?date=YYYY-MM-DD
