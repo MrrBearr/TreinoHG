@@ -47,7 +47,7 @@ function extractJson<T = unknown>(raw: string): T | null {
       /* continue */
     }
   }
-  // Brace matching
+  // Brace matching — find the outermost { ... }
   const start = raw.indexOf("{");
   if (start === -1) return null;
   let depth = 0;
@@ -109,11 +109,13 @@ export async function estimateFoods(
   });
 
   if (!res.ok) {
+    console.error("[ai:estimateFoods] Gemini failed:", res.error);
     return { ok: false, foods: [], reason: "failed" };
   }
 
   const parsed = extractJson<{ foods?: unknown[] }>(res.text);
   if (!parsed || !Array.isArray(parsed.foods)) {
+    console.error("[ai:estimateFoods] Failed to parse JSON from:", res.text.slice(0, 200));
     return { ok: false, foods: [], reason: "failed" };
   }
 
@@ -127,8 +129,16 @@ export async function estimateFoods(
 
 // ─── Photo Analysis ────────────────────────────────────────────
 
+/**
+ * Analyze a meal photo. Accepts either:
+ *  - A full data URL: "data:image/jpeg;base64,/9j/4AAQ..."
+ *  - Raw base64 string (no prefix)
+ *
+ * The function strips the data URL prefix, validates the base64 data,
+ * and sends it to Gemini as inlineData.
+ */
 export async function analyzeMealPhoto(
-  imageBase64: string,
+  imageInput: string,
   mimeType: string = "image/jpeg",
 ): Promise<PhotoAnalysisResult> {
   const emptyResult = (summary: string): PhotoAnalysisResult => ({
@@ -146,53 +156,116 @@ export async function analyzeMealPhoto(
     return emptyResult("IA indisponível. Adicione os alimentos manualmente.");
   }
 
-  // Strip data URL prefix if present
-  const base64Data = imageBase64.includes(",")
-    ? imageBase64.split(",")[1]
-    : imageBase64;
+  // Extract pure base64 data from data URL
+  let base64Data: string;
+  if (imageInput.startsWith("data:")) {
+    const commaIdx = imageInput.indexOf(",");
+    if (commaIdx === -1) {
+      return emptyResult("Formato de imagem inválido.");
+    }
+    base64Data = imageInput.slice(commaIdx + 1);
 
-  const res = await callGemini({
-    model: "primary",
-    systemInstruction: PHOTO_ANALYSIS_PROMPT,
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { text: "Analise esta refeição e retorne o JSON estruturado." },
-          { inlineData: { mimeType, data: base64Data } },
-        ],
+    // Extract mime type from data URL if not explicitly provided
+    const mimeMatch = imageInput.match(/^data:(image\/[^;]+);/);
+    if (mimeMatch) {
+      mimeType = mimeMatch[1];
+    }
+  } else if (imageInput.startsWith("http")) {
+    // For HTTP URLs, we need to fetch and convert to base64
+    try {
+      const response = await fetch(imageInput);
+      if (!response.ok) {
+        return emptyResult("Não foi possível baixar a imagem.");
+      }
+      const arrayBuffer = await response.arrayBuffer();
+      base64Data = Buffer.from(arrayBuffer).toString("base64");
+      const contentType = response.headers.get("content-type");
+      if (contentType?.startsWith("image/")) {
+        mimeType = contentType;
+      }
+    } catch (err) {
+      console.error("[ai:analyzeMealPhoto] Failed to fetch image URL:", err);
+      return emptyResult("Falha ao acessar a imagem.");
+    }
+  } else {
+    // Assume raw base64
+    base64Data = imageInput;
+  }
+
+  // Validate base64 has content (at minimum a few hundred bytes for any real image)
+  if (!base64Data || base64Data.length < 100) {
+    return emptyResult("Imagem muito pequena ou inválida.");
+  }
+
+  // Remove any whitespace/newlines that might be in the base64
+  base64Data = base64Data.replace(/\s/g, "");
+
+  console.log(
+    `[ai:analyzeMealPhoto] Sending image: mime=${mimeType}, base64Length=${base64Data.length}`,
+  );
+
+  try {
+    const res = await callGemini({
+      model: "primary",
+      systemInstruction: PHOTO_ANALYSIS_PROMPT,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: "Analise esta refeição na foto e retorne o JSON estruturado com os alimentos, calorias e macros." },
+            {
+              inlineData: {
+                mimeType,
+                data: base64Data,
+              },
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 1500,
+        // NOTE: responseMimeType is intentionally NOT set for multimodal requests
+        // as it can cause failures with image inputs on some Gemini models
       },
-    ],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 1200,
-      responseMimeType: "application/json",
-    },
-  });
+    });
 
-  if (!res.ok) {
-    return emptyResult("Falha ao analisar. Tente novamente ou adicione manualmente.");
+    if (!res.ok) {
+      console.error("[ai:analyzeMealPhoto] Gemini call failed:", res.error);
+      return emptyResult(
+        "Falha ao analisar a foto. Tente novamente ou adicione manualmente.",
+      );
+    }
+
+    console.log("[ai:analyzeMealPhoto] Raw response:", res.text.slice(0, 300));
+
+    const parsed = extractJson<Partial<PhotoAnalysisResult>>(res.text);
+    if (!parsed) {
+      console.error(
+        "[ai:analyzeMealPhoto] Failed to extract JSON from response:",
+        res.text.slice(0, 500),
+      );
+      return emptyResult("Não foi possível interpretar a resposta da IA.");
+    }
+
+    const foods = Array.isArray(parsed.foods)
+      ? parsed.foods.map(sanitizeFood).filter((f) => f.name)
+      : [];
+
+    return {
+      foods,
+      total_calories: safeNum(parsed.total_calories),
+      total_protein: safeNum(parsed.total_protein),
+      total_carbs: safeNum(parsed.total_carbs),
+      total_fat: safeNum(parsed.total_fat),
+      confidence: Math.min(1, Math.max(0, Number(parsed.confidence) || 0)),
+      summary: String(parsed.summary ?? ""),
+      fallback: false,
+    };
+  } catch (err) {
+    console.error("[ai:analyzeMealPhoto] Unexpected error:", err);
+    return emptyResult("Erro inesperado ao analisar a foto.");
   }
-
-  const parsed = extractJson<Partial<PhotoAnalysisResult>>(res.text);
-  if (!parsed) {
-    return emptyResult("Não foi possível interpretar a resposta da IA.");
-  }
-
-  const foods = Array.isArray(parsed.foods)
-    ? parsed.foods.map(sanitizeFood).filter((f) => f.name)
-    : [];
-
-  return {
-    foods,
-    total_calories: safeNum(parsed.total_calories),
-    total_protein: safeNum(parsed.total_protein),
-    total_carbs: safeNum(parsed.total_carbs),
-    total_fat: safeNum(parsed.total_fat),
-    confidence: Math.min(1, Math.max(0, Number(parsed.confidence) || 0)),
-    summary: String(parsed.summary ?? ""),
-    fallback: false,
-  };
 }
 
 // ─── Text AI (insights, chat, motivation) ──────────────────────

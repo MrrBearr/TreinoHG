@@ -48,9 +48,9 @@ function getConfig(): GeminiConfig {
 
   return {
     keys,
-    primaryModel: process.env.GEMINI_MODEL_PRIMARY ?? "gemini-2.5-flash",
-    fastModel: process.env.GEMINI_MODEL_FAST ?? "gemini-2.5-flash",
-    timeout: 40_000,
+    primaryModel: process.env.GEMINI_MODEL_PRIMARY ?? "gemini-2.0-flash",
+    fastModel: process.env.GEMINI_MODEL_FAST ?? "gemini-2.0-flash",
+    timeout: 55_000,
     maxRetries: keys.length,
   };
 }
@@ -64,7 +64,6 @@ export function isGeminiConfigured(): boolean {
 let currentKeyIndex = 0;
 
 function isRetryableError(status: number, body: string): boolean {
-  // Rate limit, quota, server errors, auth issues (key exhausted)
   if (status === 429 || status === 503 || status === 500 || status === 502) return true;
   if (status === 403 && body.includes("RESOURCE_EXHAUSTED")) return true;
   if (status === 403 && body.includes("QUOTA")) return true;
@@ -86,19 +85,27 @@ export async function callGemini(req: GeminiRequest): Promise<GeminiResponse> {
   const modelName =
     req.model === "primary" ? config.primaryModel : config.fastModel;
 
-  const body: Record<string, unknown> = {
+  // Build request body according to Gemini REST API spec
+  const requestBody: Record<string, unknown> = {
     contents: req.contents,
     generationConfig: {
       temperature: req.generationConfig?.temperature ?? 0.3,
       maxOutputTokens: req.generationConfig?.maxOutputTokens ?? 1200,
-      ...(req.generationConfig?.responseMimeType
-        ? { responseMimeType: req.generationConfig.responseMimeType }
-        : {}),
     },
   };
 
+  // Only add responseMimeType for text-only requests (no images).
+  // Multimodal requests with responseMimeType can fail on some models.
+  const hasImage = req.contents.some((msg) =>
+    msg.parts.some((p) => "inlineData" in p),
+  );
+  if (req.generationConfig?.responseMimeType && !hasImage) {
+    (requestBody.generationConfig as Record<string, unknown>).responseMimeType =
+      req.generationConfig.responseMimeType;
+  }
+
   if (req.systemInstruction) {
-    body.systemInstruction = {
+    requestBody.system_instruction = {
       parts: [{ text: req.systemInstruction }],
     };
   }
@@ -118,7 +125,7 @@ export async function callGemini(req: GeminiRequest): Promise<GeminiResponse> {
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
 
@@ -126,13 +133,13 @@ export async function callGemini(req: GeminiRequest): Promise<GeminiResponse> {
 
       if (!response.ok) {
         const errBody = await response.text().catch(() => "");
+        console.error(
+          `[gemini] Key ${idx + 1} failed (${response.status}):`,
+          errBody.slice(0, 300),
+        );
         if (isRetryableError(response.status, errBody)) {
-          console.warn(
-            `[gemini] Key ${idx + 1} failed (${response.status}), trying next...`,
-          );
           continue;
         }
-        // Non-retryable error
         return {
           ok: false,
           text: "",
@@ -142,26 +149,39 @@ export async function callGemini(req: GeminiRequest): Promise<GeminiResponse> {
       }
 
       const json = await response.json();
-      const text =
-        json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+
+      // Extract text from response — handle multiple parts
+      const parts = json?.candidates?.[0]?.content?.parts;
+      let text = "";
+      if (Array.isArray(parts)) {
+        text = parts
+          .filter((p: Record<string, unknown>) => typeof p.text === "string")
+          .map((p: Record<string, unknown>) => p.text)
+          .join("");
+      }
 
       if (!text) {
-        // Empty response — might be content filtering; try next key
-        console.warn(`[gemini] Key ${idx + 1} returned empty response`);
+        const finishReason = json?.candidates?.[0]?.finishReason;
+        console.warn(
+          `[gemini] Key ${idx + 1} returned empty (finishReason: ${finishReason})`,
+        );
+        // Content filtering or safety block — try next key
+        if (finishReason === "SAFETY" || finishReason === "RECITATION") {
+          continue;
+        }
+        // Other empty responses — still try next
         continue;
       }
 
-      // Success — rotate to this key for next time
+      // Success — remember this key
       currentKeyIndex = idx;
       return { ok: true, text, keyIndex: idx };
     } catch (err) {
-      const isTimeout =
-        err instanceof Error && err.name === "AbortError";
+      const isTimeout = err instanceof Error && err.name === "AbortError";
       console.warn(
         `[gemini] Key ${idx + 1} ${isTimeout ? "timeout" : "network error"}:`,
         (err as Error).message,
       );
-      // Try next key
       continue;
     }
   }
