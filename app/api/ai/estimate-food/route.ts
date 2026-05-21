@@ -4,6 +4,7 @@ import { estimateFoods, isGeminiConfigured } from "@/lib/ai";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
+export const dynamic = "force-dynamic";
 
 /**
  * POST /api/ai/estimate-food

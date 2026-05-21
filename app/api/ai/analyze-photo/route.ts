@@ -4,6 +4,7 @@ import { analyzeMealPhoto, isGeminiConfigured } from "@/lib/ai";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
 /**
  * POST /api/ai/analyze-photo
