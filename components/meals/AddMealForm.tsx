@@ -8,8 +8,10 @@ import { MealTypePicker } from "./MealTypePicker";
 import {
   FoodEntryRow,
   emptyEntry,
+  estimatedToDraft,
   type DraftEntry,
 } from "./FoodEntryRow";
+import type { EstimatedFood } from "@/lib/openai/estimate-food";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -75,6 +77,21 @@ export function AddMealForm({
   }
   function removeEntry(idx: number) {
     setEntries((p) => p.filter((_, i) => i !== idx));
+  }
+
+  /**
+   * Replace a single row with the foods returned by the AI when the user
+   * typed a description that resolves to multiple distinct foods (e.g.
+   * "2 ovos e 100g de arroz" -> [Ovos, Arroz]).
+   */
+  function expandFromSuggestions(idx: number, foods: EstimatedFood[]) {
+    if (foods.length === 0) return;
+    setEntries((prev) => {
+      const next = [...prev];
+      const drafts = foods.map(estimatedToDraft);
+      next.splice(idx, 1, ...drafts);
+      return next;
+    });
   }
 
   async function onSubmit(ev: React.FormEvent<HTMLFormElement>) {
@@ -185,6 +202,7 @@ export function AddMealForm({
             onChange={(v) => updateEntry(i, v)}
             removable={entries.length > 1}
             onRemove={() => removeEntry(i)}
+            onMultiSuggest={(foods) => expandFromSuggestions(i, foods)}
           />
         ))}
       </div>
