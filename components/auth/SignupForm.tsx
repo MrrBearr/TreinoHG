@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createClient } from "@/lib/supabase/client";
+import { getRedirectUrl } from "@/lib/site-url";
 
 export function SignupForm() {
   const router = useRouter();
@@ -27,7 +28,7 @@ export function SignupForm() {
       password,
       options: {
         data: { name },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: getRedirectUrl("/auth/callback"),
       },
     });
     setLoading(false);
