@@ -9,21 +9,40 @@ export default async function AppLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  let theme: string | null = null;
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("theme, onboarded")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  try {
+    const supabase = createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) redirect("/login");
+
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("theme")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    theme = (profile?.theme as string) ?? null;
+  } catch (err) {
+    // Next.js redirect() throws a special error — let it propagate
+    if (
+      err &&
+      typeof err === "object" &&
+      "digest" in err &&
+      String((err as { digest: string }).digest).startsWith("NEXT_REDIRECT")
+    ) {
+      throw err;
+    }
+    // Everything else: log but don't crash the layout shell
+    console.error("[(app)/layout] auth/profile error:", err);
+  }
 
   return (
     <>
-      <ThemeSync theme={profile?.theme ?? null} />
+      <ThemeSync theme={theme} />
       <main className="relative">{children}</main>
       <FAB />
       <BottomNav />

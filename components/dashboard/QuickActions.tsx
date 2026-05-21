@@ -7,25 +7,25 @@ const ACTIONS = [
     href: "/meals/add",
     label: "Refeição",
     icon: UtensilsCrossed,
-    tone: "bg-primary/10 text-primary",
+    tone: "bg-primary/10 text-primary group-hover:bg-primary/20",
   },
   {
     href: "/meals/analyze",
     label: "Foto IA",
     icon: Camera,
-    tone: "bg-accent/40 text-accent-foreground",
+    tone: "bg-accent/50 text-accent-foreground group-hover:bg-accent/70",
   },
   {
     href: "/workouts/add",
     label: "Treino",
     icon: Dumbbell,
-    tone: "bg-orange-500/10 text-orange-500",
+    tone: "bg-orange-500/10 text-orange-500 group-hover:bg-orange-500/20",
   },
   {
     href: "/history",
     label: "Histórico",
     icon: History,
-    tone: "bg-secondary text-foreground",
+    tone: "bg-secondary text-foreground group-hover:bg-secondary/80",
   },
 ];
 
@@ -38,17 +38,19 @@ export function QuickActions() {
           <Link
             key={a.href}
             href={a.href}
-            className="group flex flex-col items-center gap-2 rounded-2xl border border-border bg-card p-3 shadow-sm transition-all active:scale-95 hover:border-primary/40"
+            className="group flex flex-col items-center gap-2 rounded-2xl border border-border/60 bg-card/80 p-3 shadow-sm transition-all active:scale-95 hover:shadow-md hover:-translate-y-0.5"
           >
             <span
               className={cn(
-                "grid h-11 w-11 place-items-center rounded-xl",
+                "grid h-11 w-11 place-items-center rounded-xl transition-colors",
                 a.tone,
               )}
             >
-              <Icon className="h-5 w-5" />
+              <Icon className="h-5 w-5" strokeWidth={2} />
             </span>
-            <span className="text-[11px] font-medium">{a.label}</span>
+            <span className="text-[10px] font-semibold tracking-wide">
+              {a.label}
+            </span>
           </Link>
         );
       })}
