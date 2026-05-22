@@ -2,8 +2,7 @@ import {
   AIUnavailableError,
   aiProviderInfo,
   describeAIError,
-  getOpenAI,
-  OPENAI_MODEL,
+  getTextClient,
 } from "./client";
 import { withCoachPersonality } from "@/lib/coach/personalities";
 import type { Profile } from "@/types/database";
@@ -49,9 +48,10 @@ português brasileiro. Foque em utilidade prática (macro destacado, ajuste
 sugerido, ou validação) sem clichês. Sem emojis.`;
 
 /**
- * Internal helper: run a chat completion. Never throws — every failure mode
- * is encoded into the returned `AITextResult` so callers can branch on
- * `result.ok` and `result.reason`.
+ * Internal helper: run a chat completion against the active TEXT provider
+ * (LLM7 → TEXT_AI fallback). Never throws — every failure mode is encoded
+ * into the returned `AITextResult` so callers can branch on `result.ok`
+ * and `result.reason`.
  *
  * Always logs which provider/model was used and how long the request took
  * so production failures are debuggable from the route logs.
@@ -61,22 +61,26 @@ async function safeChat(
   opts: { temperature?: number; max_tokens?: number; label?: string } = {},
 ): Promise<AITextResult> {
   const label = opts.label ?? "chat";
-  let client;
+  let handle;
   try {
-    client = getOpenAI();
+    handle = getTextClient();
   } catch (err) {
     if (err instanceof AIUnavailableError) {
-      console.warn(`[ai:${label}] provider unavailable: ${describeAIError(err)}`);
+      console.warn(
+        `[ai:${label}] text provider unavailable: ${describeAIError(err)}`,
+      );
       return { ok: false, content: "", reason: "unavailable" };
     }
-    console.error(`[ai:${label}] provider init failed: ${describeAIError(err)}`);
+    console.error(
+      `[ai:${label}] text provider init failed: ${describeAIError(err)}`,
+    );
     return { ok: false, content: "", reason: "failed" };
   }
-  const provider = aiProviderInfo();
+  const provider = aiProviderInfo("text");
   const t0 = Date.now();
   try {
-    const completion = await client.chat.completions.create({
-      model: OPENAI_MODEL,
+    const completion = await handle.client.chat.completions.create({
+      model: handle.model,
       messages,
       temperature: opts.temperature ?? 0.7,
       max_tokens: opts.max_tokens ?? 280,
@@ -84,7 +88,7 @@ async function safeChat(
     const elapsed = Date.now() - t0;
     const content = completion.choices[0]?.message?.content?.trim() ?? "";
     console.info(
-      `[ai:${label}] ok in ${elapsed}ms (model=${provider.model}, base=${provider.baseUrl}, len=${content.length})`,
+      `[ai:${label}] ok in ${elapsed}ms (provider=${provider.provider}, model=${provider.model}, len=${content.length})`,
     );
     if (!content) {
       // Provider returned 200 but with no message content — treat as a
@@ -95,7 +99,7 @@ async function safeChat(
   } catch (err) {
     const elapsed = Date.now() - t0;
     console.error(
-      `[ai:${label}] request failed after ${elapsed}ms (model=${provider.model}, base=${provider.baseUrl}): ${describeAIError(err)}`,
+      `[ai:${label}] request failed after ${elapsed}ms (provider=${provider.provider}, model=${provider.model}): ${describeAIError(err)}`,
     );
     return { ok: false, content: "", reason: "failed" };
   }

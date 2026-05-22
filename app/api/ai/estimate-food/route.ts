@@ -4,7 +4,7 @@ import { estimateFoods } from "@/lib/openai/estimate-food";
 import {
   AIPipelineError,
   describeAIError,
-  isAIConfigured,
+  isTextAIConfigured,
 } from "@/lib/openai/client";
 import { loadCorrections } from "@/lib/nutrition/corrections";
 
@@ -66,12 +66,12 @@ export async function POST(req: Request) {
     );
   }
 
-  if (!isAIConfigured()) {
-    // Even with no AI, the local TACO dataset is still useful. Hit the
+  if (!isTextAIConfigured()) {
+    // Even with no text AI, the local TACO dataset is still useful. Hit the
     // estimator anyway — it'll throw AIPipelineError("unavailable") if the
     // raw-query fallback also misses, which surfaces a clear message below.
     console.warn(
-      "[estimate-food] AI not configured — attempting offline fallback only.",
+      "[estimate-food] text AI not configured — attempting offline TACO fallback only.",
     );
   }
 

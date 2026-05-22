@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { analyzeMealPhoto } from "@/lib/openai/analyze-photo";
-import { isAIConfigured } from "@/lib/openai/client";
+import { isVisionAIConfigured } from "@/lib/openai/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,9 +35,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_image" }, { status: 400 });
   }
 
-  if (!isAIConfigured()) {
+  // Vision is the NVIDIA channel — checked separately from the text channel
+  // because the two providers are independent.
+  if (!isVisionAIConfigured()) {
     return NextResponse.json(
-      { error: "ai_unavailable", message: "IA não configurada no servidor." },
+      {
+        error: "ai_unavailable",
+        message: "IA de imagem não configurada no servidor.",
+      },
       { status: 503 },
     );
   }

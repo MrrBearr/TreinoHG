@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateDayInsight } from "@/lib/openai/insights";
-import { isAIConfigured } from "@/lib/openai/client";
+import { isTextAIConfigured } from "@/lib/openai/client";
 import { getDaySummary, getProfile } from "@/lib/queries";
 import { toDateKey } from "@/lib/utils";
 
@@ -35,10 +35,13 @@ export async function GET(req: Request) {
     });
   }
 
-  // Fail soft if the AI provider is not configured.
-  if (!isAIConfigured()) {
+  // Fail soft if the text-AI provider is not configured.
+  if (!isTextAIConfigured()) {
     return NextResponse.json(
-      { error: "ai_unavailable", message: "IA não configurada no servidor." },
+      {
+        error: "ai_unavailable",
+        message: "IA de texto não configurada no servidor.",
+      },
       { status: 503 },
     );
   }
