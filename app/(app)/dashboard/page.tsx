@@ -18,11 +18,14 @@ import {
   getOrCreateDay,
   getDaySummary,
 } from "@/lib/queries";
-import { toDateKey } from "@/lib/utils";
+import { formatLongBR, hourInBrazil, todayKeyBR } from "@/lib/utils";
 import { getDailyPhrase } from "@/lib/motivational-phrases";
 
 export default async function DashboardPage() {
-  const dateKey = toDateKey();
+  // "Today" is anchored to Brazilian time on every render, regardless of
+  // where the server runs. This is the single source of truth used by every
+  // server-component that needs the current calendar day.
+  const dateKey = todayKeyBR();
   const [profile, _day, { meals, entries }, workouts, summary] =
     await Promise.all([
       getProfile(),
@@ -38,14 +41,10 @@ export default async function DashboardPage() {
   const fatTarget = profile?.fat_target_g ?? 70;
 
   const phrase = getDailyPhrase(dateKey);
-  const today = new Date().toLocaleDateString("pt-BR", {
-    weekday: "long",
-    day: "2-digit",
-    month: "long",
-  });
+  const today = formatLongBR(dateKey);
 
   const greeting = (() => {
-    const h = new Date().getHours();
+    const h = hourInBrazil();
     if (h < 6) return "Boa madrugada";
     if (h < 12) return "Bom dia";
     if (h < 18) return "Boa tarde";

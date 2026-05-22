@@ -14,23 +14,27 @@ export const MEAL_TYPES = [
 export type MealType = (typeof MEAL_TYPES)[number]["value"];
 
 export const WORKOUT_TYPES = [
-  // Strength splits — vigorous resistance training averaged with rest periods.
-  // Compendium of Physical Activities: 3.5–6.0 MET depending on effort.
-  // We use 4.5 as a realistic moderate baseline; intensity multipliers move it.
-  { value: "legs", label: "Pernas", met: 5.0 },
-  { value: "chest", label: "Peito", met: 4.5 },
-  { value: "back", label: "Costas", met: 4.5 },
-  { value: "shoulders", label: "Ombros", met: 4.0 },
-  { value: "arms", label: "Braços", met: 3.8 },
-  { value: "abs", label: "Abdômen", met: 4.0 },
+  // Strength splits — typical resistance training, MET values reflect the
+  // averaged effort over an entire session including inter-set rest.
+  // Compendium of Physical Activities lists 3.5 (light/moderate) up to 6.0
+  // (vigorous). Defaults sit in the conservative zone so a chill leg day
+  // doesn't pretend to be a hard one. Intensity multiplier moves them.
+  { value: "legs", label: "Pernas", met: 4.5 },
+  { value: "chest", label: "Peito", met: 4.0 },
+  { value: "back", label: "Costas", met: 4.0 },
+  { value: "shoulders", label: "Ombros", met: 3.8 },
+  { value: "arms", label: "Braços", met: 3.5 },
+  { value: "abs", label: "Abdômen", met: 3.5 },
   // Compound full-body sessions burn slightly more than isolated splits.
-  { value: "fullbody", label: "Full Body", met: 5.5 },
-  // Cardio family — moderate steady-state defaults.
-  { value: "cardio", label: "Cardio", met: 6.5 },
-  { value: "running", label: "Corrida", met: 9.0 },
-  { value: "walking", label: "Caminhada", met: 3.5 },
-  { value: "treadmill", label: "Esteira", met: 6.0 },
-  { value: "free", label: "Treino livre", met: 4.5 },
+  { value: "fullbody", label: "Full Body", met: 5.0 },
+  // Cardio family — conservative steady-state defaults. The previous values
+  // assumed continuous high-intensity which over-counted for typical gym
+  // cardio (light spin, easy bike, treadmill walk-jog mix).
+  { value: "cardio", label: "Cardio", met: 5.5 },
+  { value: "running", label: "Corrida", met: 8.0 },
+  { value: "walking", label: "Caminhada", met: 3.0 },
+  { value: "treadmill", label: "Esteira", met: 4.5 },
+  { value: "free", label: "Treino livre", met: 4.0 },
   { value: "rest", label: "Descanso", met: 1.0 },
 ] as const;
 

@@ -9,6 +9,7 @@ import type {
 import type { DaySummary } from "@/types";
 import { sumMacros } from "@/lib/calculations/calories";
 import { isNextControlError } from "@/lib/next-control-errors";
+import { addDaysToKey, todayKeyBR } from "@/lib/timezone";
 
 /**
  * Defensive read layer.
@@ -229,14 +230,6 @@ export async function getDaySummary(date: string): Promise<DaySummary> {
   );
 }
 
-/** YYYY-MM-DD in local time. Mirrors lib/utils.toDateKey to avoid UTC drift. */
-function localDateKey(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
 export async function getRecentDays(days = 30): Promise<DaySummary[]> {
   return safeRun(
     "getRecentDays",
@@ -247,10 +240,11 @@ export async function getRecentDays(days = 30): Promise<DaySummary[]> {
       } = await supabase.auth.getUser();
       if (!user) return [];
 
-      const since = new Date();
-      since.setHours(0, 0, 0, 0);
-      since.setDate(since.getDate() - (days - 1));
-      const sinceKey = localDateKey(since);
+      // Range walks BR-local days backwards from "today in Brazil". Computing
+      // the bounds in BR avoids a +/- 1 day off-by-one when the server (UTC)
+      // and the user (BRT) are on different calendar days at midnight.
+      const today = todayKeyBR();
+      const sinceKey = addDaysToKey(today, -(days - 1));
 
       const [{ data: entries }, { data: workouts }] = await Promise.all([
         supabase
@@ -267,9 +261,7 @@ export async function getRecentDays(days = 30): Promise<DaySummary[]> {
 
       const map = new Map<string, DaySummary>();
       for (let i = 0; i < days; i++) {
-        const d = new Date(since);
-        d.setDate(since.getDate() + i);
-        const k = localDateKey(d);
+        const k = addDaysToKey(sinceKey, i);
         map.set(k, emptyDaySummary(k));
       }
 

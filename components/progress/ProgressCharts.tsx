@@ -17,7 +17,7 @@ import {
 import type { DaySummary } from "@/types";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { formatNumber } from "@/lib/utils";
+import { formatBR, formatNumber } from "@/lib/utils";
 
 interface ProgressChartsProps {
   days: DaySummary[];
@@ -278,9 +278,6 @@ function ChartGroup({
 }
 
 function shortLabel(date: string): string {
-  const d = new Date(date + "T00:00:00");
-  return d.toLocaleDateString("pt-BR", {
-    day: "2-digit",
-    month: "2-digit",
-  });
+  // BR-aware: keeps DD/MM consistent regardless of where the device runs.
+  return formatBR(date, { day: "2-digit", month: "2-digit" });
 }

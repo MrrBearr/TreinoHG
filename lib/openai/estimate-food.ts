@@ -4,6 +4,7 @@ import {
   getOpenAI,
   OPENAI_MODEL,
 } from "./client";
+import { resolveFoods, type FoodCorrection } from "@/lib/nutrition/resolver";
 
 export interface EstimatedFood {
   name: string;
@@ -12,17 +13,35 @@ export interface EstimatedFood {
   protein_g: number;
   carbs_g: number;
   fat_g: number;
+  /** Where the numbers came from: favorite | taco | usda | ai. */
+  source?: "favorite" | "taco" | "usda" | "ai";
+  /** 0..1 — UI hint about how much to trust the numbers. */
+  confidence?: number;
 }
 
-const SYSTEM_PROMPT = `Você é um nutricionista virtual.
-A partir de uma descrição em texto livre (em português brasileiro), identifique os alimentos
-e estime calorias e macros para a porção descrita. Use a tabela TACO/IBGE quando aplicável.
+/**
+ * Hybrid food estimator.
+ *
+ * The AI is now used only as a parser + fallback estimator. After the AI
+ * proposes a list of `{ name, quantity, calories, macros }`, the nutrition
+ * resolver overrides the kcal/macros from a curated TACO/TBCA dataset (or
+ * USDA, or the user's own past corrections) when possible.
+ *
+ * Behaviour:
+ *  - Always resolves; never throws.
+ *  - Returns [] when the AI provider is unavailable AND no items were
+ *    provided ahead of time.
+ *  - Tags each food with the source used so the UI can display provenance.
+ */
+const SYSTEM_PROMPT = `Você é um nutricionista virtual brasileiro.
+A partir de uma descrição em texto livre (em português), identifique os alimentos
+e proponha:
+  - "name": nome curto do alimento em português
+  - "quantity": porção comum se não estiver explícita (ex: "150g", "1 unidade média", "1 fatia")
+  - "calories", "protein_g", "carbs_g", "fat_g": estimativa conservadora
 
-Regras:
-- Identifique até 6 alimentos distintos.
-- Se a quantidade não estiver clara, sugira uma porção comum (ex: "120g", "1 unidade média", "1 fatia").
-- Todos os campos numéricos devem ser números (não strings).
-- Seja conservador; é melhor subestimar a mais a calorias.
+Use a tabela TACO/TBCA brasileira como referência sempre que possível.
+Identifique até 6 alimentos distintos.
 
 Responda SEMPRE em JSON exatamente neste formato:
 {
@@ -38,30 +57,55 @@ Responda SEMPRE em JSON exatamente neste formato:
   ]
 }`;
 
+interface AIRawFood {
+  name?: unknown;
+  quantity?: unknown;
+  calories?: unknown;
+  protein?: unknown;
+  protein_g?: unknown;
+  carbs?: unknown;
+  carbs_g?: unknown;
+  fat?: unknown;
+  fat_g?: unknown;
+}
+
 function safeNum(v: unknown): number {
   const n = typeof v === "number" ? v : Number(v);
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.round(n * 10) / 10);
 }
 
-function sanitize(f: unknown): EstimatedFood {
-  const obj = (f ?? {}) as Record<string, unknown>;
+function takeRaw(raw: AIRawFood): {
+  name: string;
+  quantity: string;
+  ai_calories: number;
+  ai_protein: number;
+  ai_carbs: number;
+  ai_fat: number;
+} {
   return {
-    name: String(obj.name ?? "").slice(0, 120).trim() || "Alimento",
-    quantity: String(obj.quantity ?? "").slice(0, 80),
-    calories: safeNum(obj.calories),
-    protein_g: safeNum(obj.protein_g ?? obj.protein),
-    carbs_g: safeNum(obj.carbs_g ?? obj.carbs),
-    fat_g: safeNum(obj.fat_g ?? obj.fat),
+    name: String(raw.name ?? "")
+      .slice(0, 120)
+      .trim(),
+    quantity: String(raw.quantity ?? "").slice(0, 80),
+    ai_calories: safeNum(raw.calories),
+    ai_protein: safeNum(raw.protein_g ?? raw.protein),
+    ai_carbs: safeNum(raw.carbs_g ?? raw.carbs),
+    ai_fat: safeNum(raw.fat_g ?? raw.fat),
   };
 }
 
 /**
- * Estimates one or more foods from a free-text description. Always resolves
- * — never throws — so callers can render a graceful fallback. Returns an
- * empty array when the AI provider is unavailable or returns malformed JSON.
+ * Asks the AI to parse the user's text into structured items, then runs the
+ * resolver to ground the kcal/macros in real nutrition data.
+ *
+ * @param query   Free-text description in pt-BR.
+ * @param opts.corrections  Optional per-user correction cache to prefer.
  */
-export async function estimateFoods(query: string): Promise<EstimatedFood[]> {
+export async function estimateFoods(
+  query: string,
+  opts: { corrections?: FoodCorrection[] } = {},
+): Promise<EstimatedFood[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
 
@@ -74,6 +118,7 @@ export async function estimateFoods(query: string): Promise<EstimatedFood[]> {
     return [];
   }
 
+  let aiItems: ReturnType<typeof takeRaw>[] = [];
   try {
     const completion = await client.chat.completions.create({
       model: OPENAI_MODEL,
@@ -88,14 +133,30 @@ export async function estimateFoods(query: string): Promise<EstimatedFood[]> {
 
     const raw = completion.choices[0]?.message?.content ?? "";
     const parsed = extractJson<{ foods?: unknown }>(raw);
-    if (!parsed || !Array.isArray(parsed.foods)) return [];
-
-    return (parsed.foods as unknown[])
-      .slice(0, 6)
-      .map(sanitize)
-      .filter((f) => f.name);
+    if (parsed && Array.isArray(parsed.foods)) {
+      aiItems = (parsed.foods as unknown[])
+        .slice(0, 6)
+        .map((f) => takeRaw((f ?? {}) as AIRawFood))
+        .filter((f) => f.name.length > 0);
+    }
   } catch (err) {
-    console.error("[ai] estimateFoods failed", err);
-    return [];
+    console.error("[ai] estimateFoods request failed", err);
   }
+
+  if (aiItems.length === 0) return [];
+
+  const resolved = await resolveFoods(aiItems, {
+    corrections: opts.corrections,
+  });
+
+  return resolved.map((r) => ({
+    name: r.name,
+    quantity: r.quantity,
+    calories: r.calories,
+    protein_g: r.protein_g,
+    carbs_g: r.carbs_g,
+    fat_g: r.fat_g,
+    source: r.source,
+    confidence: r.confidence,
+  }));
 }
