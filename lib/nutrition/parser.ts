@@ -103,6 +103,103 @@ export function extractLeadingQuantity(
 }
 
 /**
+ * Split a free-text query containing two or more "food + quantity" pairs
+ * into separate items, deterministically — no AI required.
+ *
+ * Handles both directions:
+ *   "arroz 237g feijão 83g frango 412g"
+ *      → [{arroz, 237g}, {feijão, 83g}, {frango, 412g}]
+ *   "237g arroz e 83g feijão"
+ *      → [{arroz, 237g}, {feijão, 83g}]
+ *   "2 fatias de pão e 100g manteiga"
+ *      → [{pão, 2 fatias}, {manteiga, 100g}]
+ *
+ * Returns null when there are fewer than two recognisable quantities, so
+ * the caller can route single-food queries through the existing AI/TACO
+ * pipeline instead.
+ *
+ * Notes
+ * -----
+ *   - We deliberately leave "ovos" out of this regex (unlike parseQuantity)
+ *     because a phrase like "2 ovos" is BOTH the food name AND the unit;
+ *     splitting on it loses the food name. Single-food queries with eggs
+ *     keep working through the AI / single-food TACO path.
+ *   - Connector words ("e", "com", "de", commas, semicolons) are stripped
+ *     from extracted names so we don't end up with "e arroz" or " arroz".
+ *   - Direction is detected from whether the first quantity is preceded by
+ *     letters: "name qty name qty …" vs "qty name qty name …".
+ */
+const MULTI_QTY_RE =
+  /(\d+(?:[.,]\d+)?)\s*(kg|gramas?|gr|g|mililitros?|ml|unidades?|und\.?s?|un|fatias?|colher(?:es)?\s+de\s+\w+|cs|cc|x[ií]caras?|porç\w+s?|pratos?|tigelas?)/gi;
+
+export function splitMultiFoodQuery(
+  input: string | null | undefined,
+): Array<{ name: string; quantity: string }> | null {
+  if (!input) return null;
+
+  // Collect every quantity match with its slice positions in the original
+  // string so we can carve names out of the surrounding text.
+  const matches: { start: number; end: number; text: string }[] = [];
+  const re = new RegExp(MULTI_QTY_RE.source, "gi");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(input)) !== null) {
+    matches.push({
+      start: m.index,
+      end: m.index + m[0].length,
+      text: m[0].replace(/\s+/g, " ").trim(),
+    });
+  }
+
+  if (matches.length < 2) return null;
+
+  // "Name first" when there are letters BEFORE the first quantity match.
+  const beforeFirstQty = input.slice(0, matches[0].start);
+  const nameFirst =
+    /[a-zçáàãâéêíóôõúü]/i.test(beforeFirstQty) &&
+    beforeFirstQty.trim().length >= 2;
+
+  const items: { name: string; quantity: string }[] = [];
+
+  if (nameFirst) {
+    // "name1 qty1 name2 qty2 … nameN qtyN" — name precedes its quantity.
+    let cursor = 0;
+    for (const qty of matches) {
+      const name = cleanFoodFragment(input.slice(cursor, qty.start));
+      if (name) items.push({ name, quantity: qty.text });
+      cursor = qty.end;
+    }
+  } else {
+    // "qty1 name1 qty2 name2 … qtyN nameN" — quantity precedes its name.
+    for (let i = 0; i < matches.length; i++) {
+      const qty = matches[i];
+      const nextStart =
+        i + 1 < matches.length ? matches[i + 1].start : input.length;
+      const name = cleanFoodFragment(input.slice(qty.end, nextStart));
+      if (name) items.push({ name, quantity: qty.text });
+    }
+  }
+
+  return items.length >= 2 ? items : null;
+}
+
+function cleanFoodFragment(raw: string): string {
+  let s = raw.replace(/[,;.]/g, " ");
+  // Strip standalone Portuguese connector words. We use zero-width
+  // lookbehind/lookahead instead of `\b` because:
+  //   1. JS `\b` is ASCII-only — `\bo\b` matches the trailing "o" of
+  //      "feijão" / "pão" (since "ã" isn't a word char), corrupting names.
+  //   2. Consuming `\s` on both sides prevents stripping back-to-back
+  //      connectors like "e o" because the shared space is eaten by the
+  //      first match. Lookbehind/lookahead leave the whitespace in place
+  //      so each connector is matched independently.
+  s = s.replace(
+    /(?<=^|\s)(de|da|do|com|sem|e|o|a|os|as|um|uma|no|na|em)(?=\s|$)/gi,
+    "",
+  );
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/**
  * Convert a parsed quantity into grams, using the TACO entry's metadata when
  * helpful (so "1 unidade" of "ovo" → 50g rather than a generic default).
  *
