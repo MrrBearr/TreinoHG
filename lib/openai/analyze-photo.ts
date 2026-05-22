@@ -3,8 +3,7 @@ import {
   aiProviderInfo,
   describeAIError,
   extractJson,
-  getOpenAI,
-  OPENAI_MODEL,
+  getVisionClient,
 } from "./client";
 import { withCoachPersonality } from "@/lib/coach/personalities";
 import type { AIDetectedFood } from "@/types/database";
@@ -100,39 +99,44 @@ function clamp01(n: number): number {
 }
 
 /**
- * Analyzes a meal photo and returns a structured result. Always resolves —
- * never throws — returning a fallback shape when the provider is unavailable
- * or the response is malformed. Inspect `result.fallback` to detect failures.
+ * Analyzes a meal photo and returns a structured result.
+ *
+ * Provider: VISION channel — NVIDIA NIM via getVisionClient(). The endpoint
+ * is OpenAI-compatible so the same chat-completions wire format works.
+ *
+ * Always resolves — never throws — returning a fallback shape with
+ * `fallback: true` when the provider is unavailable or the response is
+ * malformed. The route layer surfaces this as a 503 to the client.
  */
 export async function analyzeMealPhoto(
   imageDataUrlOrUrl: string,
   options: { personality?: string | null } = {},
 ): Promise<PhotoAnalysisResult> {
-  let client;
+  let handle;
   try {
-    client = getOpenAI();
+    handle = getVisionClient();
   } catch (err) {
     if (err instanceof AIUnavailableError) {
       console.warn(
-        `[ai:analyze-photo] provider unavailable: ${describeAIError(err)}`,
+        `[ai:analyze-photo] vision provider unavailable: ${describeAIError(err)}`,
       );
       return emptyResult(
-        "IA indisponível no momento. Adicione os alimentos manualmente.",
+        "IA de imagem indisponível no momento. Adicione os alimentos manualmente.",
       );
     }
     console.error(
-      `[ai:analyze-photo] provider init failed: ${describeAIError(err)}`,
+      `[ai:analyze-photo] vision provider init failed: ${describeAIError(err)}`,
     );
     return emptyResult(
       "Falha ao iniciar a análise. Tente novamente ou adicione manualmente.",
     );
   }
 
-  const provider = aiProviderInfo();
+  const provider = aiProviderInfo("vision");
   const t0 = Date.now();
   try {
-    const completion = await client.chat.completions.create({
-      model: OPENAI_MODEL,
+    const completion = await handle.client.chat.completions.create({
+      model: handle.model,
       response_format: { type: "json_object" },
       messages: [
         {
@@ -160,7 +164,7 @@ export async function analyzeMealPhoto(
     const elapsed = Date.now() - t0;
     const raw = completion.choices[0]?.message?.content ?? "";
     console.info(
-      `[ai:analyze-photo] ok in ${elapsed}ms (model=${provider.model}, base=${provider.baseUrl}, len=${raw.length})`,
+      `[ai:analyze-photo] ok in ${elapsed}ms (provider=${provider.provider}, model=${provider.model}, len=${raw.length})`,
     );
 
     const parsed = extractJson<Partial<PhotoAnalysisResult>>(raw);
@@ -177,7 +181,7 @@ export async function analyzeMealPhoto(
   } catch (err) {
     const elapsed = Date.now() - t0;
     console.error(
-      `[ai:analyze-photo] request failed after ${elapsed}ms (model=${provider.model}, base=${provider.baseUrl}): ${describeAIError(err)}`,
+      `[ai:analyze-photo] request failed after ${elapsed}ms (provider=${provider.provider}, model=${provider.model}): ${describeAIError(err)}`,
     );
     return emptyResult(
       "Falha ao analisar a foto. Tente novamente ou adicione manualmente.",

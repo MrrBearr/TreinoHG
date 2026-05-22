@@ -4,8 +4,7 @@ import {
   aiProviderInfo,
   describeAIError,
   extractJson,
-  getOpenAI,
-  OPENAI_MODEL,
+  getTextClient,
 } from "./client";
 import {
   resolveFoods,
@@ -29,14 +28,15 @@ export interface EstimatedFood {
 /**
  * Hybrid food estimator.
  *
- * The AI is used as a parser + fallback estimator. After the AI proposes a
- * list of `{ name, quantity, calories, macros }`, the nutrition resolver
- * overrides the numbers with curated TACO/TBCA data (or USDA, or the
- * user's own past corrections) when possible.
+ * The TEXT AI (LLM7 → TEXT_AI fallback) is used as a parser + fallback
+ * estimator. After it proposes a list of `{ name, quantity, calories,
+ * macros }`, the nutrition resolver overrides the numbers with curated
+ * TACO/TBCA data (or USDA, or the user's own past corrections) when
+ * possible.
  *
  * Failure modes — each handled deliberately:
- *  - AI provider not configured (no API key): try TACO/USDA on the raw
- *    query so the user still gets known foods. If even that misses, throw
+ *  - AI provider not configured (no key): try TACO/USDA on the raw query
+ *    so the user still gets known foods. If even that misses, throw
  *    AIPipelineError("unavailable") so the route returns a clean 503.
  *  - AI request fails (network / 5xx / bad model): same fallback as above,
  *    but throw AIPipelineError("failed") on total miss.
@@ -124,8 +124,8 @@ function toEstimated(r: ResolvedFood): EstimatedFood {
 }
 
 /**
- * Asks the AI to parse the user's text into structured items, then runs the
- * resolver to ground the kcal/macros in real nutrition data.
+ * Asks the TEXT AI to parse the user's text into structured items, then
+ * runs the resolver to ground the kcal/macros in real nutrition data.
  *
  * @param query   Free-text description in pt-BR.
  * @param opts.corrections  Optional per-user correction cache to prefer.
@@ -213,27 +213,27 @@ interface AIParseResult {
 }
 
 async function runAIParse(query: string): Promise<AIParseResult> {
-  let client;
+  let handle;
   try {
-    client = getOpenAI();
+    handle = getTextClient();
   } catch (err) {
     if (err instanceof AIUnavailableError) {
       console.warn(
-        "[ai:estimateFoods] provider unavailable:",
+        "[ai:estimateFoods] text provider unavailable:",
         describeAIError(err),
       );
       return { items: [], error: { reason: "unavailable", message: err.message } };
     }
     const msg = describeAIError(err);
-    console.error("[ai:estimateFoods] provider init failed:", msg);
+    console.error("[ai:estimateFoods] text provider init failed:", msg);
     return { items: [], error: { reason: "failed", message: msg } };
   }
 
-  const provider = aiProviderInfo();
+  const provider = aiProviderInfo("text");
   const t0 = Date.now();
   try {
-    const completion = await client.chat.completions.create({
-      model: OPENAI_MODEL,
+    const completion = await handle.client.chat.completions.create({
+      model: handle.model,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
@@ -246,7 +246,7 @@ async function runAIParse(query: string): Promise<AIParseResult> {
     const elapsed = Date.now() - t0;
     const raw = completion.choices[0]?.message?.content ?? "";
     console.info(
-      `[ai:estimateFoods] ok in ${elapsed}ms (model=${provider.model}, base=${provider.baseUrl}, len=${raw.length})`,
+      `[ai:estimateFoods] ok in ${elapsed}ms (provider=${provider.provider}, model=${provider.model}, len=${raw.length})`,
     );
 
     const parsed = extractJson<{ foods?: unknown }>(raw);
@@ -273,7 +273,7 @@ async function runAIParse(query: string): Promise<AIParseResult> {
     const elapsed = Date.now() - t0;
     const msg = describeAIError(err);
     console.error(
-      `[ai:estimateFoods] request failed after ${elapsed}ms (model=${provider.model}, base=${provider.baseUrl}): ${msg}`,
+      `[ai:estimateFoods] request failed after ${elapsed}ms (provider=${provider.provider}, model=${provider.model}): ${msg}`,
     );
     return { items: [], error: { reason: "failed", message: msg } };
   }

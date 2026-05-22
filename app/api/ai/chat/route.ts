@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { answerCoachQuestion } from "@/lib/openai/insights";
-import { isAIConfigured } from "@/lib/openai/client";
+import { isTextAIConfigured } from "@/lib/openai/client";
 import { getDaySummary, getProfile } from "@/lib/queries";
 import { toDateKey } from "@/lib/utils";
 
@@ -30,9 +30,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "empty_question" }, { status: 400 });
   }
 
-  if (!isAIConfigured()) {
+  if (!isTextAIConfigured()) {
     return NextResponse.json(
-      { error: "ai_unavailable", message: "IA não configurada no servidor." },
+      {
+        error: "ai_unavailable",
+        message: "IA de texto não configurada no servidor.",
+      },
       { status: 503 },
     );
   }
