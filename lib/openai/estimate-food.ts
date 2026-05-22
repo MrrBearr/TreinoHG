@@ -10,6 +10,11 @@ import {
   resolveFoods,
   type FoodCorrection,
 } from "@/lib/nutrition/resolver";
+import {
+  extractLeadingQuantity,
+  parseQuantity,
+  quantityToGrams,
+} from "@/lib/nutrition/parser";
 import type { ResolvedFood } from "@/lib/nutrition/types";
 
 export interface EstimatedFood {
@@ -137,8 +142,21 @@ export async function estimateFoods(
   const trimmed = query.trim();
   if (!trimmed) return [];
 
+  // Detect an explicit leading quantity ("300g", "2 unidades", "1 fatia")
+  // so we can pin it through every downstream step. The user's typed
+  // quantity is authoritative — we never normalise it to 100g, even when
+  // the AI prefers a different portion size.
+  const userQty = extractLeadingQuantity(trimmed);
+
   // ============== 1) AI parse pass ==============
   const aiResult = await runAIParse(trimmed);
+
+  // Lock the user's quantity in place when the query is a single-item
+  // request like "300g arroz". Multi-item queries ("2 ovos e 100g arroz")
+  // are left alone so the AI can attribute each quantity to the right food.
+  if (userQty && aiResult.items.length === 1) {
+    aiResult.items[0] = pinUserQuantity(aiResult.items[0], userQty);
+  }
 
   // ============== 2) Resolve AI items, when present ==============
   if (aiResult.items.length > 0) {
@@ -146,6 +164,12 @@ export async function estimateFoods(
       const resolved = await resolveFoods(aiResult.items, {
         corrections: opts.corrections,
       });
+      // Belt-and-braces: if the user typed a quantity, it must come back
+      // unchanged in the rendered output, regardless of what the resolver
+      // chose to display (e.g. when it canonicalises an alias).
+      if (userQty && resolved.length === 1) {
+        resolved[0] = { ...resolved[0], quantity: userQty };
+      }
       return resolved.map(toEstimated);
     } catch (err) {
       // Resolver should be self-healing, but never let a TACO/USDA bug
@@ -171,11 +195,16 @@ export async function estimateFoods(
   // This is what makes the resolver USEFUL when the AI provider is broken,
   // misconfigured, or just returned junk. A user typing "frango grelhado"
   // still gets TACO data even with no AI at all.
+  //
+  // Important: we use the user's typed quantity when present (so "300g
+  // arroz" stays 300g). The "100g" string is ONLY used as an internal
+  // scaling default when the user did not supply a quantity at all — it
+  // never overwrites a typed value.
   const fallback = await resolveFoods(
     [
       {
         name: trimmed,
-        quantity: "100g", // assume a single 100g serving when no quantity given
+        quantity: userQty ?? "100g",
       },
     ],
     { corrections: opts.corrections },
@@ -189,7 +218,9 @@ export async function estimateFoods(
 
   const first = fallback[0];
   if (first && first.source !== "ai" && first.calories > 0) {
-    return [toEstimated(first)];
+    // If the user typed a quantity, echo it verbatim — never replace.
+    const display = userQty ?? first.quantity;
+    return [toEstimated({ ...first, quantity: display })];
   }
 
   // ============== 4) Nothing worked. Surface real errors to the route. ==============
@@ -282,4 +313,36 @@ async function runAIParse(query: string): Promise<AIParseResult> {
 function round1(n: number): number {
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.round(n * 10) / 10;
+}
+
+/**
+ * Replace the AI item's quantity with the user's exact typed value, and
+ * proportionally rescale the AI's macro hints to the new mass so the
+ * resolver's downstream computations stay consistent.
+ *
+ * Worked example: AI returns { quantity: "100g", calories: 128 } for
+ * "arroz" but the user typed "300g". We pin quantity → "300g" and scale
+ * macros × 3 so a) if the resolver finds a TACO match it computes 384 kcal
+ * directly from density × 300g, and b) if there's no match the AI fallback
+ * still reports 384 kcal instead of 128.
+ *
+ * When grams can't be inferred for either side (e.g. "1 prato" with no
+ * unit_g hint) we keep the AI's macros as-is — better than zeroing them.
+ */
+function pinUserQuantity(
+  item: ParsedAIItem,
+  userQty: string,
+): ParsedAIItem {
+  const aiGrams = quantityToGrams(parseQuantity(item.quantity), null);
+  const userGrams = quantityToGrams(parseQuantity(userQty), null);
+  const scale =
+    aiGrams && userGrams && aiGrams > 0 ? userGrams / aiGrams : 1;
+  return {
+    ...item,
+    quantity: userQty,
+    ai_calories: item.ai_calories * scale,
+    ai_protein: item.ai_protein * scale,
+    ai_carbs: item.ai_carbs * scale,
+    ai_fat: item.ai_fat * scale,
+  };
 }
