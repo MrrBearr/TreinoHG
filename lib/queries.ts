@@ -8,6 +8,7 @@ import type {
 } from "@/types/database";
 import type { DaySummary } from "@/types";
 import { sumMacros } from "@/lib/calculations/calories";
+import { isNextControlError } from "@/lib/next-control-errors";
 
 /**
  * Defensive read layer.
@@ -16,6 +17,11 @@ import { sumMacros } from "@/lib/calculations/calories";
  * components rendering the dashboard, history, progress, etc. never throw and
  * never trigger the production "An error occurred in the Server Components
  * render" white-screen.
+ *
+ * IMPORTANT: We must NOT swallow Next.js control-flow errors (redirect,
+ * notFound, dynamic-server-usage). Those carry no real failure information
+ * and silencing them lets Next prerender empty/anonymous HTML for
+ * authenticated pages.
  */
 async function safeRun<T>(
   label: string,
@@ -25,6 +31,7 @@ async function safeRun<T>(
   try {
     return await fn();
   } catch (err) {
+    if (isNextControlError(err)) throw err;
     if (process.env.NODE_ENV !== "production") {
       console.error(`[queries:${label}]`, err);
     } else {
