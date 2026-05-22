@@ -24,7 +24,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { MealTypePicker } from "./MealTypePicker";
 import { applyPhotoAnalysis } from "@/lib/actions";
-import { cn, fileToBase64, formatKcal, formatNumber, toDateKey } from "@/lib/utils";
+import {
+  cn,
+  fileToBase64,
+  formatKcal,
+  formatNumber,
+  hourInBrazil,
+  toDateKey,
+} from "@/lib/utils";
 import type { MealType } from "@/lib/constants";
 import type { AIDetectedFood } from "@/types/database";
 import type { PhotoAnalysisResult } from "@/lib/openai/analyze-photo";
@@ -717,7 +724,7 @@ function NumField({
 }
 
 function guessMealType(): MealType {
-  const h = new Date().getHours();
+  const h = hourInBrazil();
   if (h < 10) return "breakfast";
   if (h < 14) return "lunch";
   if (h < 17) return "snack";

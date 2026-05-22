@@ -1,5 +1,11 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import {
+  addDaysToKey,
+  fromBrazilDateKey,
+  toBrazilDateKey,
+  todayKeyBR,
+} from "@/lib/timezone";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -30,27 +36,41 @@ export function pct(value: number, total: number): number {
   return clamp((value / total) * 100, 0, 100);
 }
 
-/** YYYY-MM-DD in local time */
+/**
+ * YYYY-MM-DD in **Brazil time** (America/Sao_Paulo).
+ *
+ * Historically this used `Date.getFullYear/Month/Date` which read the local
+ * time zone of whatever machine was running the code — broken on a UTC server
+ * around midnight Brasília. All current callers want the Brazilian calendar
+ * day, so we delegate to `lib/timezone`.
+ */
 export function toDateKey(d: Date = new Date()): string {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return toBrazilDateKey(d);
 }
 
+/**
+ * Parse a YYYY-MM-DD key as the Brazilian calendar day (returns a Date that
+ * represents noon in Brasília for that key, so locale formatting is stable).
+ */
 export function fromDateKey(key: string): Date {
-  const [y, m, d] = key.split("-").map(Number);
-  return new Date(y, (m ?? 1) - 1, d ?? 1);
+  return fromBrazilDateKey(key);
 }
 
+/** Add days to a Date in BR-local terms. Returns a new Date instance. */
 export function addDays(date: Date, days: number): Date {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-  return d;
+  // Round-trip through the BR key so the result lines up with the BR calendar
+  // even when the input came from a non-BR-aware constructor.
+  const key = toBrazilDateKey(date);
+  return fromBrazilDateKey(addDaysToKey(key, days));
 }
 
 export function isSameDateKey(a: string, b: string): boolean {
   return a === b;
+}
+
+/** True when the supplied YYYY-MM-DD matches today in Brazil. */
+export function isToday(key: string): boolean {
+  return key === todayKeyBR();
 }
 
 export async function fileToBase64(file: File): Promise<string> {
@@ -61,3 +81,21 @@ export async function fileToBase64(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+// Convenience re-exports so callers can keep importing from `@/lib/utils`.
+export {
+  BRAZIL_TZ,
+  formatBR,
+  formatLongBR,
+  formatShortBR,
+  formatLongFullBR,
+  hourInBrazil,
+  timeStringBR,
+  todayKeyBR,
+  toBrazilDateKey,
+  fromBrazilDateKey,
+  addDaysToKey,
+  weekdayLongBR,
+  dayOfMonthBR,
+  isTodayKey,
+} from "@/lib/timezone";

@@ -30,7 +30,13 @@ import {
   getDaySummary,
   getProfile,
 } from "@/lib/queries";
-import { addDays, fromDateKey, toDateKey, formatKcal, formatNumber } from "@/lib/utils";
+import {
+  addDaysToKey,
+  formatKcal,
+  formatLongFullBR,
+  formatNumber,
+  isTodayKey,
+} from "@/lib/utils";
 import { MEAL_TYPES, WORKOUT_TYPES } from "@/lib/constants";
 
 interface Props {
@@ -53,16 +59,10 @@ export default async function DayDetailPage({ params }: Props) {
   const carbsTarget = profile?.carbs_target_g ?? 220;
   const fatTarget = profile?.fat_target_g ?? 70;
 
-  const date = fromDateKey(dateKey);
-  const prev = toDateKey(addDays(date, -1));
-  const next = toDateKey(addDays(date, 1));
-  const isToday = dateKey === toDateKey();
-  const dateLabel = date.toLocaleDateString("pt-BR", {
-    weekday: "long",
-    day: "2-digit",
-    month: "long",
-    year: "numeric",
-  });
+  const prev = addDaysToKey(dateKey, -1);
+  const next = addDaysToKey(dateKey, 1);
+  const isToday = isTodayKey(dateKey);
+  const dateLabel = formatLongFullBR(dateKey);
 
   return (
     <PageContainer>

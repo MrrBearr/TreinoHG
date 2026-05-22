@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { estimateFoods } from "@/lib/openai/estimate-food";
 import { isAIConfigured } from "@/lib/openai/client";
+import { loadCorrections } from "@/lib/nutrition/corrections";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,7 +63,10 @@ export async function POST(req: Request) {
   }
 
   try {
-    const foods = await estimateFoods(query);
+    // Pull the user's correction history so foods they've edited before
+    // outrank both the local TACO data and the AI estimate.
+    const corrections = await loadCorrections(supabase, user.id);
+    const foods = await estimateFoods(query, { corrections });
     return NextResponse.json({ foods });
   } catch (err) {
     console.error("[estimate-food] unexpected error", err);

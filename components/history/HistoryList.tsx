@@ -1,7 +1,13 @@
 import Link from "next/link";
 import { ChevronRight, Flame, Dumbbell, UtensilsCrossed } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { formatNumber } from "@/lib/utils";
+import {
+  dayOfMonthBR,
+  formatBR,
+  formatNumber,
+  isTodayKey,
+  weekdayLongBR,
+} from "@/lib/utils";
 import type { DaySummary } from "@/types";
 
 export function HistoryList({
@@ -14,13 +20,11 @@ export function HistoryList({
   return (
     <div className="space-y-2">
       {days.map((d) => {
-        const date = new Date(d.date + "T00:00:00");
-        const isToday = d.date === new Date().toISOString().slice(0, 10);
-        const label = date.toLocaleDateString("pt-BR", {
-          weekday: "short",
-          day: "2-digit",
-          month: "short",
-        });
+        const isToday = isTodayKey(d.date);
+        // Both "qua" (column) and "quarta-feira" (row) come from BR-aware
+        // formatters so we never display a day that is off-by-one from the
+        // actual calendar day in Brazil.
+        const weekdayShort = formatBR(d.date, { weekday: "short" });
         const status = statusFor(d.net_kcal, target);
         const empty =
           d.consumed_kcal === 0 && d.workout_count === 0 && d.meal_count === 0;
@@ -33,18 +37,16 @@ export function HistoryList({
             <Card className="flex items-center gap-3 p-3">
               <div className="flex w-12 shrink-0 flex-col items-center gap-0.5 rounded-xl bg-secondary p-2">
                 <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  {label.split(",")[0]}
+                  {weekdayShort.replace(".", "").slice(0, 3)}
                 </span>
                 <span className="stat-number text-lg leading-none">
-                  {date.getDate()}
+                  {dayOfMonthBR(d.date)}
                 </span>
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <div className="font-semibold capitalize">
-                    {date.toLocaleDateString("pt-BR", {
-                      weekday: "long",
-                    })}
+                    {weekdayLongBR(d.date)}
                   </div>
                   {isToday && (
                     <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">

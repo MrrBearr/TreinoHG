@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { calculateAllTargets } from "@/lib/calculations/nutrition";
 import { estimateWorkoutCalories } from "@/lib/calculations/calories";
+import { rememberFoodEntry } from "@/lib/nutrition/corrections";
 import type {
   ActivityLevel,
   Goal,
@@ -196,6 +197,25 @@ export async function addMeal(args: {
       source: e.source ?? "manual",
     }));
     await supabase.from("food_entries").insert(rows);
+
+    // Train the per-user correction memory so future estimates of these
+    // foods reuse the values the user actually saved (whether typed or
+    // edited from an AI suggestion). Each call is best-effort and never
+    // throws — the meal save itself already succeeded above.
+    await Promise.all(
+      args.entries
+        .filter((e) => e.name.trim().length > 0)
+        .map((e) =>
+          rememberFoodEntry(supabase, user.id, {
+            name: e.name.trim(),
+            quantity: e.quantity ?? null,
+            calories: Number(e.calories) || 0,
+            protein_g: Number(e.protein_g) || 0,
+            carbs_g: Number(e.carbs_g) || 0,
+            fat_g: Number(e.fat_g) || 0,
+          }),
+        ),
+    );
   }
 
   revalidatePath("/dashboard");

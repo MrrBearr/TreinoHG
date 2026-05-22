@@ -18,7 +18,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
 import { addMeal } from "@/lib/actions";
-import { formatKcal, formatNumber, toDateKey } from "@/lib/utils";
+import {
+  formatKcal,
+  formatNumber,
+  hourInBrazil,
+  timeStringBR,
+  toDateKey,
+} from "@/lib/utils";
 import type { MealType } from "@/lib/constants";
 
 interface AddMealFormProps {
@@ -241,12 +247,13 @@ export function AddMealForm({
 }
 
 function currentTime(): string {
-  const d = new Date();
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  // Always show the user the current Brazilian time, regardless of where the
+  // device clock thinks it is.
+  return timeStringBR();
 }
 
 function guessMealType(): MealType {
-  const h = new Date().getHours();
+  const h = hourInBrazil();
   if (h < 10) return "breakfast";
   if (h < 14) return "lunch";
   if (h < 17) return "snack";
