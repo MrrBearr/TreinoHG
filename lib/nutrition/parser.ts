@@ -41,8 +41,14 @@ const UNIT_PATTERNS: { unit: ParsedQuantity["unit"]; re: RegExp }[] = [
 
 export function parseQuantity(raw: string | null | undefined): ParsedQuantity {
   if (!raw) return { value: 0, unit: "unknown" };
-  const text = raw.trim().toLowerCase();
+  let text = raw.trim().toLowerCase();
   if (!text) return { value: 0, unit: "unknown" };
+
+  // Normalise "150g" / "100ml" / "1fatia" into "150 g" / "100 ml" / "1 fatia"
+  // so the \b-anchored unit regexes actually match. Without this, digits and
+  // their adjacent unit are part of the same word and \b never fires —
+  // every "150g" silently ended up as `unknown` and bypassed TACO.
+  text = text.replace(/(\d)([a-zçáàãâéêíóôõúü])/gi, "$1 $2");
 
   const numMatch = text.match(NUM_RE);
   const value = numMatch ? Number(numMatch[1].replace(",", ".")) : 1;

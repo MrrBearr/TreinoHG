@@ -66,7 +66,20 @@ export async function resolveFoods(
   items: RawFoodInput[],
   options: ResolveOptions = {},
 ): Promise<ResolvedFood[]> {
-  return Promise.all(items.map((it) => resolveSingle(it, options)));
+  // Per-item guard so one bad input can't crash the whole batch.
+  return Promise.all(
+    items.map(async (it) => {
+      try {
+        return await resolveSingle(it, options);
+      } catch (err) {
+        console.error(
+          "[nutrition:resolver] resolveSingle crashed, falling back to AI numbers:",
+          (err as Error)?.message ?? err,
+        );
+        return aiFallback(it, "ai");
+      }
+    }),
+  );
 }
 
 async function resolveSingle(
@@ -225,17 +238,20 @@ function findCorrection(
   const norm = normalize(name);
   if (!norm) return null;
   for (const c of list) {
+    if (!c?.name) continue;
     if (normalize(c.name) === norm) return c;
   }
   // Substring fallback so "frango grelhado" matches a saved "frango".
   for (const c of list) {
+    if (!c?.name) continue;
     const cn = normalize(c.name);
     if (cn && (norm.includes(cn) || cn.includes(norm))) return c;
   }
   return null;
 }
 
-function normalize(s: string): string {
+function normalize(s: string | null | undefined): string {
+  if (!s || typeof s !== "string") return "";
   return s
     .toLowerCase()
     .normalize("NFD")
