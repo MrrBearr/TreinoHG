@@ -147,11 +147,16 @@ export function FoodEntryRow({
 
       const first = foods[0];
       const target = entryRef.current;
+      // Quantity rule: the user's typed value is sacred. We only fill
+      // `quantity` when the row is genuinely empty — manual click does NOT
+      // override a typed quantity. Name and macros still refresh on manual
+      // click since users explicitly request a refresh by clicking the IA
+      // button. This is what keeps "300g" / "150g" / "2 unidades" from
+      // being normalised to whatever portion the AI prefers.
       const next: DraftEntry = {
         ...target,
         name: manual || !target.name ? first.name : target.name,
-        quantity:
-          manual || !target.quantity ? first.quantity : target.quantity,
+        quantity: target.quantity ? target.quantity : first.quantity,
         calories:
           manual || !target.calories
             ? first.calories

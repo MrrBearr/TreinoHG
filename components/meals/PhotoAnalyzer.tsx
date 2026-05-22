@@ -558,9 +558,15 @@ function DetectedFoodEditor({
         return;
       }
       const first = foods[0];
+      // The user's typed quantity is authoritative. If they edited a row's
+      // quantity to "300g", clicking "Refinar com IA" must not normalise
+      // it back to whatever portion the AI prefers. Name and macros are
+      // refreshed (that's the point of refining); quantity is preserved
+      // when present.
+      const userQty = (food.estimated_quantity ?? "").trim();
       onChange({
         name: first.name || food.name,
-        estimated_quantity: first.quantity || food.estimated_quantity,
+        estimated_quantity: userQty || first.quantity,
         calories: first.calories || 0,
         protein: first.protein_g || 0,
         carbs: first.carbs_g || 0,

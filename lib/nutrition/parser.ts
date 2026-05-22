@@ -69,6 +69,40 @@ export function parseQuantity(raw: string | null | undefined): ParsedQuantity {
 }
 
 /**
+ * Detects a quantity expression at the START of a free-text query so we can
+ * preserve the *user's exact typed quantity* through the AI pipeline.
+ *
+ *   "300g arroz"            → "300g"
+ *   "150 g de frango"       → "150 g"
+ *   "2 unidades de banana"  → "2 unidades"
+ *   "1 fatia de pão"        → "1 fatia"
+ *   "1.5kg de arroz"        → "1.5kg"
+ *   "frango grelhado"       → null   (no quantity prefix)
+ *   "300 arroz"             → null   (number without a unit — ambiguous)
+ *
+ * Returns the matched substring exactly as the user typed it (whitespace,
+ * casing) so we can echo it back to the UI without normalising. Returns
+ * null when no recognisable quantity is at the start.
+ *
+ * Used by the server-side estimator to lock the user's mass in place
+ * BEFORE the AI's preferred portion can override it.
+ */
+const LEADING_QTY_RE =
+  /^\s*(\d+(?:[.,]\d+)?\s*(?:kg|gr|g|ml|gramas?|mililitros?|unidades?|und\.?s?|un|ovos?|fatias?|colher(?:es)?\s+de\s+\w+|cs|cc|x[ií]caras?|porç\w+s?|pratos?|tigelas?))(?=\s|$|de\s)/i;
+
+export function extractLeadingQuantity(
+  input: string | null | undefined,
+): string | null {
+  if (!input) return null;
+  const m = input.match(LEADING_QTY_RE);
+  if (!m) return null;
+  const captured = m[1].trim();
+  // Sanity: the capture must contain at least one digit.
+  if (!/\d/.test(captured)) return null;
+  return captured;
+}
+
+/**
  * Convert a parsed quantity into grams, using the TACO entry's metadata when
  * helpful (so "1 unidade" of "ovo" → 50g rather than a generic default).
  *
