@@ -75,7 +75,7 @@ export function FoodEntryRow({
   onMultiSuggest,
 }: FoodEntryRowProps) {
   const [loading, setLoading] = React.useState(false);
-  const [errored, setErrored] = React.useState(false);
+  const [errored, setErrored] = React.useState<string | null>(null);
   const lastQueriedRef = React.useRef<string>("");
   const abortRef = React.useRef<AbortController | null>(null);
 
@@ -111,7 +111,7 @@ export function FoodEntryRow({
     abortRef.current = controller;
 
     setLoading(true);
-    setErrored(false);
+    setErrored(null);
     try {
       const res = await fetch("/api/ai/estimate-food", {
         method: "POST",
@@ -120,13 +120,20 @@ export function FoodEntryRow({
         signal: controller.signal,
       });
       if (!res.ok) {
-        setErrored(true);
+        const json = (await res
+          .json()
+          .catch(() => ({}))) as { message?: string };
+        setErrored(json.message ?? "Não consegui estimar agora.");
         return;
       }
       const json: { foods?: EstimatedFood[] } = await res.json();
       const foods = Array.isArray(json.foods) ? json.foods : [];
       if (foods.length === 0) {
-        if (manual) setErrored(true);
+        if (manual) {
+          setErrored(
+            "Não encontrei esse alimento. Tente um nome ou quantidade mais específica.",
+          );
+        }
         return;
       }
 
@@ -175,7 +182,7 @@ export function FoodEntryRow({
     } catch (err) {
       if ((err as { name?: string })?.name === "AbortError") return;
       console.error("[ai] estimate row failed", err);
-      setErrored(true);
+      setErrored("Não consegui estimar agora.");
     } finally {
       setLoading(false);
     }
@@ -277,9 +284,7 @@ export function FoodEntryRow({
               Estimando com IA…
             </>
           ) : errored ? (
-            <span className="text-warning">
-              Não consegui estimar agora — preencha manualmente.
-            </span>
+            <span className="text-warning">{errored}</span>
           ) : entry.ai_estimated ? (
             <>
               <Sparkles className="h-3 w-3 text-primary" />

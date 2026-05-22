@@ -1,4 +1,10 @@
-import { AIUnavailableError, getOpenAI, OPENAI_MODEL } from "./client";
+import {
+  AIUnavailableError,
+  aiProviderInfo,
+  describeAIError,
+  getOpenAI,
+  OPENAI_MODEL,
+} from "./client";
 import { withCoachPersonality } from "@/lib/coach/personalities";
 import type { Profile } from "@/types/database";
 import type { DaySummary } from "@/types";
@@ -42,20 +48,32 @@ recém-registrada. Comente em uma frase curta (máximo 18 palavras) em
 português brasileiro. Foque em utilidade prática (macro destacado, ajuste
 sugerido, ou validação) sem clichês. Sem emojis.`;
 
-/** Internal helper: run a chat completion and never throw. */
+/**
+ * Internal helper: run a chat completion. Never throws — every failure mode
+ * is encoded into the returned `AITextResult` so callers can branch on
+ * `result.ok` and `result.reason`.
+ *
+ * Always logs which provider/model was used and how long the request took
+ * so production failures are debuggable from the route logs.
+ */
 async function safeChat(
   messages: { role: "system" | "user" | "assistant"; content: string }[],
-  opts: { temperature?: number; max_tokens?: number } = {},
+  opts: { temperature?: number; max_tokens?: number; label?: string } = {},
 ): Promise<AITextResult> {
+  const label = opts.label ?? "chat";
   let client;
   try {
     client = getOpenAI();
   } catch (err) {
     if (err instanceof AIUnavailableError) {
+      console.warn(`[ai:${label}] provider unavailable: ${describeAIError(err)}`);
       return { ok: false, content: "", reason: "unavailable" };
     }
-    throw err;
+    console.error(`[ai:${label}] provider init failed: ${describeAIError(err)}`);
+    return { ok: false, content: "", reason: "failed" };
   }
+  const provider = aiProviderInfo();
+  const t0 = Date.now();
   try {
     const completion = await client.chat.completions.create({
       model: OPENAI_MODEL,
@@ -63,10 +81,22 @@ async function safeChat(
       temperature: opts.temperature ?? 0.7,
       max_tokens: opts.max_tokens ?? 280,
     });
+    const elapsed = Date.now() - t0;
     const content = completion.choices[0]?.message?.content?.trim() ?? "";
+    console.info(
+      `[ai:${label}] ok in ${elapsed}ms (model=${provider.model}, base=${provider.baseUrl}, len=${content.length})`,
+    );
+    if (!content) {
+      // Provider returned 200 but with no message content — treat as a
+      // soft failure so the route surfaces it instead of caching empty.
+      return { ok: false, content: "", reason: "failed" };
+    }
     return { ok: true, content };
   } catch (err) {
-    console.error("[ai] chat completion failed:", err);
+    const elapsed = Date.now() - t0;
+    console.error(
+      `[ai:${label}] request failed after ${elapsed}ms (model=${provider.model}, base=${provider.baseUrl}): ${describeAIError(err)}`,
+    );
     return { ok: false, content: "", reason: "failed" };
   }
 }
@@ -92,7 +122,7 @@ Dê um insight curto e útil para o usuário hoje.`;
       },
       { role: "user", content: userMsg },
     ],
-    { temperature: 0.7, max_tokens: 160 },
+    { temperature: 0.7, max_tokens: 160, label: "insight" },
   );
 }
 
@@ -115,7 +145,7 @@ export async function answerCoachQuestion(
       },
       { role: "user", content: question },
     ],
-    { temperature: 0.7, max_tokens: 280 },
+    { temperature: 0.7, max_tokens: 280, label: "chat" },
   );
 }
 
@@ -134,7 +164,7 @@ export async function generateMotivationalLine(
         content: `Objetivo do usuário: ${goal ?? "performance"}. Gere a frase de hoje.`,
       },
     ],
-    { temperature: 0.9, max_tokens: 60 },
+    { temperature: 0.9, max_tokens: 60, label: "motivation" },
   );
 }
 
@@ -162,6 +192,6 @@ export async function generateMealFeedback(args: {
       },
       { role: "user", content: userMsg },
     ],
-    { temperature: 0.7, max_tokens: 80 },
+    { temperature: 0.7, max_tokens: 80, label: "meal-feedback" },
   );
 }

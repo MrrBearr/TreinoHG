@@ -1,5 +1,7 @@
 import {
   AIUnavailableError,
+  aiProviderInfo,
+  describeAIError,
   extractJson,
   getOpenAI,
   OPENAI_MODEL,
@@ -111,13 +113,23 @@ export async function analyzeMealPhoto(
     client = getOpenAI();
   } catch (err) {
     if (err instanceof AIUnavailableError) {
+      console.warn(
+        `[ai:analyze-photo] provider unavailable: ${describeAIError(err)}`,
+      );
       return emptyResult(
         "IA indisponível no momento. Adicione os alimentos manualmente.",
       );
     }
-    throw err;
+    console.error(
+      `[ai:analyze-photo] provider init failed: ${describeAIError(err)}`,
+    );
+    return emptyResult(
+      "Falha ao iniciar a análise. Tente novamente ou adicione manualmente.",
+    );
   }
 
+  const provider = aiProviderInfo();
+  const t0 = Date.now();
   try {
     const completion = await client.chat.completions.create({
       model: OPENAI_MODEL,
@@ -145,16 +157,28 @@ export async function analyzeMealPhoto(
       max_tokens: 1200,
     });
 
+    const elapsed = Date.now() - t0;
     const raw = completion.choices[0]?.message?.content ?? "";
+    console.info(
+      `[ai:analyze-photo] ok in ${elapsed}ms (model=${provider.model}, base=${provider.baseUrl}, len=${raw.length})`,
+    );
+
     const parsed = extractJson<Partial<PhotoAnalysisResult>>(raw);
     if (!parsed) {
+      console.warn(
+        "[ai:analyze-photo] could not parse JSON — preview:",
+        raw.slice(0, 200),
+      );
       return emptyResult(
         "Não foi possível interpretar a resposta da IA. Adicione os alimentos manualmente.",
       );
     }
     return sanitize(parsed);
   } catch (err) {
-    console.error("[ai] analyzeMealPhoto failed:", err);
+    const elapsed = Date.now() - t0;
+    console.error(
+      `[ai:analyze-photo] request failed after ${elapsed}ms (model=${provider.model}, base=${provider.baseUrl}): ${describeAIError(err)}`,
+    );
     return emptyResult(
       "Falha ao analisar a foto. Tente novamente ou adicione manualmente.",
     );

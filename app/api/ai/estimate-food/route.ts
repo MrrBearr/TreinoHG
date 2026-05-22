@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { estimateFoods } from "@/lib/openai/estimate-food";
-import { isAIConfigured } from "@/lib/openai/client";
+import {
+  AIPipelineError,
+  describeAIError,
+  isAIConfigured,
+} from "@/lib/openai/client";
 import { loadCorrections } from "@/lib/nutrition/corrections";
 
 export const runtime = "nodejs";
@@ -12,18 +16,25 @@ export const maxDuration = 30;
  * POST /api/ai/estimate-food
  *
  * Body: { query: string }
- * Returns: { foods: EstimatedFood[] }  (empty array on graceful failure)
+ * Returns: { foods: EstimatedFood[] }  on success.
+ *          { error, message }          with status 503 when the AI pipeline
+ *                                      is unavailable / failed AND the
+ *                                      offline TACO/USDA fallback also
+ *                                      missed the query.
  *
- * Used by the manual meal entry form to autofill calories/macros from a
- * free-text food description (e.g. "2 ovos e 100g de arroz"). Always
- * runs server-side; the API key is never exposed to the browser.
+ * The route is the single boundary between the UI and the hybrid
+ * AI + nutrition resolver. It never silently swallows AI errors — that was
+ * the cause of the previous "AI quietly broke" regression.
  */
 export async function POST(req: Request) {
   let supabase;
   try {
     supabase = createClient();
   } catch (err) {
-    console.error("[estimate-food] supabase init failed", err);
+    console.error(
+      "[estimate-food] supabase init failed:",
+      describeAIError(err),
+    );
     return NextResponse.json(
       { error: "config_error", message: "Configuração inválida no servidor." },
       { status: 503 },
@@ -56,20 +67,35 @@ export async function POST(req: Request) {
   }
 
   if (!isAIConfigured()) {
-    return NextResponse.json(
-      { error: "ai_unavailable", message: "IA não configurada no servidor." },
-      { status: 503 },
+    // Even with no AI, the local TACO dataset is still useful. Hit the
+    // estimator anyway — it'll throw AIPipelineError("unavailable") if the
+    // raw-query fallback also misses, which surfaces a clear message below.
+    console.warn(
+      "[estimate-food] AI not configured — attempting offline fallback only.",
     );
   }
 
   try {
-    // Pull the user's correction history so foods they've edited before
-    // outrank both the local TACO data and the AI estimate.
     const corrections = await loadCorrections(supabase, user.id);
     const foods = await estimateFoods(query, { corrections });
     return NextResponse.json({ foods });
   } catch (err) {
-    console.error("[estimate-food] unexpected error", err);
+    if (err instanceof AIPipelineError) {
+      console.warn(
+        `[estimate-food] AI pipeline ${err.reason}: ${err.message}`,
+      );
+      return NextResponse.json(
+        {
+          error: err.reason === "unavailable" ? "ai_unavailable" : "ai_failed",
+          message:
+            err.reason === "unavailable"
+              ? "IA indisponível no momento."
+              : "Falha ao estimar alimentos. Tente de novo em instantes.",
+        },
+        { status: 503 },
+      );
+    }
+    console.error("[estimate-food] unexpected error:", describeAIError(err));
     return NextResponse.json(
       { error: "ai_failed", message: "Falha ao estimar." },
       { status: 503 },
