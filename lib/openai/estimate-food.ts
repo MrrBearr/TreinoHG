@@ -14,6 +14,7 @@ import {
   extractLeadingQuantity,
   parseQuantity,
   quantityToGrams,
+  splitMultiFoodQuery,
 } from "@/lib/nutrition/parser";
 import type { ResolvedFood } from "@/lib/nutrition/types";
 
@@ -141,6 +142,43 @@ export async function estimateFoods(
 ): Promise<EstimatedFood[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
+
+  // ============== 0) Multi-food fast path ==============
+  // "arroz 237g feijão 83g frango 412g" must split into THREE entries with
+  // their exact quantities preserved — never one merged item, never a
+  // 100g fallback. We do this deterministically before any AI call so the
+  // result is independent of provider availability or parsing quality.
+  const multi = splitMultiFoodQuery(trimmed);
+  if (multi && multi.length >= 2) {
+    try {
+      const resolved = await resolveFoods(multi, {
+        corrections: opts.corrections,
+      });
+      // Belt-and-braces: echo the user's typed quantity verbatim per item,
+      // even if the resolver canonicalised it during materialisation.
+      return resolved.map((r, i) => ({
+        ...toEstimated(r),
+        quantity: multi[i].quantity,
+      }));
+    } catch (err) {
+      // Resolver crash should not erase the split — fall back to AI macros
+      // of zero so the user can edit. The split itself is still useful.
+      console.error(
+        "[ai:estimateFoods] resolver crashed on multi-food split:",
+        describeAIError(err),
+      );
+      return multi.map((it) => ({
+        name: it.name,
+        quantity: it.quantity,
+        calories: 0,
+        protein_g: 0,
+        carbs_g: 0,
+        fat_g: 0,
+        source: "ai",
+        confidence: 0.4,
+      }));
+    }
+  }
 
   // Detect an explicit leading quantity ("300g", "2 unidades", "1 fatia")
   // so we can pin it through every downstream step. The user's typed
