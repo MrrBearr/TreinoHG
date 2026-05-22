@@ -6,6 +6,7 @@ import { getDaySummary, getProfile } from "@/lib/queries";
 import { toDateKey } from "@/lib/utils";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 export async function GET(req: Request) {

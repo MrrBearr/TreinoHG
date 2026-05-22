@@ -4,6 +4,7 @@ import { estimateFoods } from "@/lib/openai/estimate-food";
 import { isAIConfigured } from "@/lib/openai/client";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 /**
