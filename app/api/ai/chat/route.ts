@@ -42,22 +42,20 @@ export async function POST(req: Request) {
   ]);
 
   try {
-    const result = await answerCoachQuestion(
-      question,
-      profile?.calorie_target
-        ? {
-            profile: {
-              goal: profile.goal,
-              calorie_target: profile.calorie_target,
-              protein_target_g: profile.protein_target_g,
-              carbs_target_g: profile.carbs_target_g,
-              fat_target_g: profile.fat_target_g,
-              weight_kg: profile.weight_kg,
-            },
-            summary,
-          }
-        : undefined,
-    );
+    // Always build context so coach personality is respected — even when the
+    // user hasn't set targets yet. Numerical fields fall back to safe values.
+    const result = await answerCoachQuestion(question, {
+      profile: {
+        goal: profile?.goal ?? null,
+        calorie_target: profile?.calorie_target ?? null,
+        protein_target_g: profile?.protein_target_g ?? null,
+        carbs_target_g: profile?.carbs_target_g ?? null,
+        fat_target_g: profile?.fat_target_g ?? null,
+        weight_kg: profile?.weight_kg ?? null,
+        coach_personality: profile?.coach_personality ?? null,
+      },
+      summary,
+    });
 
     if (!result.ok || !result.content) {
       return NextResponse.json(

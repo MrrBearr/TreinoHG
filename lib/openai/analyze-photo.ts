@@ -4,6 +4,7 @@ import {
   getOpenAI,
   OPENAI_MODEL,
 } from "./client";
+import { withCoachPersonality } from "@/lib/coach/personalities";
 import type { AIDetectedFood } from "@/types/database";
 
 export interface PhotoAnalysisResult {
@@ -18,7 +19,7 @@ export interface PhotoAnalysisResult {
   fallback?: boolean;
 }
 
-const SYSTEM_PROMPT = `Você é um nutricionista virtual que analisa fotos de refeições.
+const SYSTEM_BASE = `Você é um nutricionista virtual que analisa fotos de refeições.
 Identifique cada alimento visível na imagem, estime a quantidade em gramas ou unidades,
 e calcule calorias e macronutrientes (proteína, carboidrato, gordura) com base em tabelas
 nutricionais brasileiras (TACO/IBGE) quando possível.
@@ -48,7 +49,8 @@ Regras importantes:
 - "confidence" entre 0 e 1.
 - Se a imagem não for uma refeição, retorne foods vazio e summary explicando.
 - Use sempre português brasileiro nos nomes e no resumo.
-- Seja conservador nas estimativas; é melhor subestimar que superestimar drasticamente.`;
+- Seja conservador nas estimativas; é melhor subestimar que superestimar drasticamente.
+- O campo "summary" deve respeitar a personalidade de coach indicada abaixo.`;
 
 function emptyResult(summary: string): PhotoAnalysisResult {
   return {
@@ -102,6 +104,7 @@ function clamp01(n: number): number {
  */
 export async function analyzeMealPhoto(
   imageDataUrlOrUrl: string,
+  options: { personality?: string | null } = {},
 ): Promise<PhotoAnalysisResult> {
   let client;
   try {
@@ -120,7 +123,10 @@ export async function analyzeMealPhoto(
       model: OPENAI_MODEL,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "system",
+          content: withCoachPersonality(SYSTEM_BASE, options.personality),
+        },
         {
           role: "user",
           content: [

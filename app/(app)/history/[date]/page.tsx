@@ -68,7 +68,7 @@ export default async function DayDetailPage({ params }: Props) {
     <PageContainer>
       <Header title="Detalhe do dia" showBack />
 
-      <div className="space-y-5 animate-fade-in">
+      <div className="space-y-5 animate-fade-in stagger">
         <div className="flex items-center justify-between">
           <Link
             href={`/history/${prev}`}

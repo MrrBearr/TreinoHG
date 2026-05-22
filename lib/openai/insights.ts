@@ -1,4 +1,5 @@
 import { AIUnavailableError, getOpenAI, OPENAI_MODEL } from "./client";
+import { withCoachPersonality } from "@/lib/coach/personalities";
 import type { Profile } from "@/types/database";
 import type { DaySummary } from "@/types";
 
@@ -11,6 +12,7 @@ export interface InsightContext {
     | "carbs_target_g"
     | "fat_target_g"
     | "weight_kg"
+    | "coach_personality"
   >;
   summary: DaySummary;
 }
@@ -23,18 +25,22 @@ export interface AITextResult {
   reason?: "unavailable" | "failed";
 }
 
-const INSIGHT_SYSTEM = `Você é um coach de nutrição e treino direto, prático e motivador.
-Sua resposta deve ter no máximo 2 frases curtas em português brasileiro.
-Tom: firme, claro, performático, sem clichês. Não use emojis.
-Foque em ações concretas baseadas nos dados do dia.`;
+const INSIGHT_BASE = `Você é um coach de nutrição e treino do app TreinoHG.
+Sua resposta deve ter no máximo 2 frases curtas em português brasileiro,
+focadas em ações concretas baseadas nos dados do dia. Sem emojis.`;
 
-const CHAT_SYSTEM = `Você é o coach IA do TreinoHG, um app de nutrição e treino.
-Responda em português brasileiro, de forma direta, prática e motivadora.
-Use no máximo 4 frases. Foque em ações concretas. Sem emojis.
-Quando útil, sugira ajustes em refeições, macros ou treino.`;
+const CHAT_BASE = `Você é o coach IA do TreinoHG, um app de nutrição e treino.
+Responda em português brasileiro, no máximo 4 frases. Foque em ações
+concretas. Sem emojis. Quando útil, sugira ajustes em refeições,
+macros ou treino.`;
 
-const MOTIVATION_SYSTEM =
-  "Gere uma frase curta e potente de motivação fitness em português brasileiro. Máximo 12 palavras. Sem emojis. Tom firme, focado em disciplina e performance.";
+const MOTIVATION_BASE =
+  "Gere uma frase curta e potente de motivação fitness em português brasileiro. Máximo 12 palavras. Sem emojis.";
+
+const MEAL_FEEDBACK_BASE = `Você é o coach IA do TreinoHG analisando uma refeição
+recém-registrada. Comente em uma frase curta (máximo 18 palavras) em
+português brasileiro. Foque em utilidade prática (macro destacado, ajuste
+sugerido, ou validação) sem clichês. Sem emojis.`;
 
 /** Internal helper: run a chat completion and never throw. */
 async function safeChat(
@@ -77,7 +83,13 @@ Dê um insight curto e útil para o usuário hoje.`;
 
   return safeChat(
     [
-      { role: "system", content: INSIGHT_SYSTEM },
+      {
+        role: "system",
+        content: withCoachPersonality(
+          INSIGHT_BASE,
+          ctx.profile.coach_personality,
+        ),
+      },
       { role: "user", content: userMsg },
     ],
     { temperature: 0.7, max_tokens: 160 },
@@ -94,7 +106,13 @@ export async function answerCoachQuestion(
 
   return safeChat(
     [
-      { role: "system", content: CHAT_SYSTEM + sysContext },
+      {
+        role: "system",
+        content: withCoachPersonality(
+          CHAT_BASE + sysContext,
+          ctx?.profile.coach_personality,
+        ),
+      },
       { role: "user", content: question },
     ],
     { temperature: 0.7, max_tokens: 280 },
@@ -103,15 +121,47 @@ export async function answerCoachQuestion(
 
 export async function generateMotivationalLine(
   goal: string | null,
+  personality?: string | null,
 ): Promise<AITextResult> {
   return safeChat(
     [
-      { role: "system", content: MOTIVATION_SYSTEM },
+      {
+        role: "system",
+        content: withCoachPersonality(MOTIVATION_BASE, personality),
+      },
       {
         role: "user",
         content: `Objetivo do usuário: ${goal ?? "performance"}. Gere a frase de hoje.`,
       },
     ],
     { temperature: 0.9, max_tokens: 60 },
+  );
+}
+
+/**
+ * Generates a one-line meal feedback comment in the user's chosen tone.
+ * Used right after a meal is saved (optional surface), and any future
+ * feedback flow that wants tone-aware copy.
+ */
+export async function generateMealFeedback(args: {
+  personality?: string | null;
+  meal_summary: string;
+  totals: {
+    calories: number;
+    protein_g: number;
+    carbs_g: number;
+    fat_g: number;
+  };
+}): Promise<AITextResult> {
+  const userMsg = `Refeição: ${args.meal_summary}. Totais: ${Math.round(args.totals.calories)} kcal, ${Math.round(args.totals.protein_g)}g proteína, ${Math.round(args.totals.carbs_g)}g carbo, ${Math.round(args.totals.fat_g)}g gordura. Comente em uma frase curta.`;
+  return safeChat(
+    [
+      {
+        role: "system",
+        content: withCoachPersonality(MEAL_FEEDBACK_BASE, args.personality),
+      },
+      { role: "user", content: userMsg },
+    ],
+    { temperature: 0.7, max_tokens: 80 },
   );
 }

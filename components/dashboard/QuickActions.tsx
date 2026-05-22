@@ -38,7 +38,7 @@ export function QuickActions() {
           <Link
             key={a.href}
             href={a.href}
-            className="group flex flex-col items-center gap-2 rounded-2xl border border-border bg-card p-3 shadow-sm transition-all active:scale-95 hover:border-primary/40"
+            className="press group flex flex-col items-center gap-2 rounded-2xl border border-border bg-card p-3 shadow-soft transition-all hover:border-primary/40 hover:-translate-y-0.5"
           >
             <span
               className={cn(

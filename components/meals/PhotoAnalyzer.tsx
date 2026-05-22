@@ -10,22 +10,41 @@ import {
   RotateCcw,
   Save,
   Pencil,
+  Check,
+  Plus,
+  Trash2,
+  Wand2,
+  ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { MealTypePicker } from "./MealTypePicker";
 import { Input } from "@/components/ui/input";
+import { MealTypePicker } from "./MealTypePicker";
 import { applyPhotoAnalysis } from "@/lib/actions";
-import { fileToBase64, formatKcal, formatNumber, toDateKey } from "@/lib/utils";
+import { cn, fileToBase64, formatKcal, formatNumber, toDateKey } from "@/lib/utils";
 import type { MealType } from "@/lib/constants";
 import type { AIDetectedFood } from "@/types/database";
 import type { PhotoAnalysisResult } from "@/lib/openai/analyze-photo";
+import type { EstimatedFood } from "@/lib/openai/estimate-food";
 
 type Step = "capture" | "preview" | "analyzing" | "review";
 
+/**
+ * The photo analyzer flow.
+ *
+ * 1. capture     – pick or take a photo
+ * 2. preview     – confirm photo before sending to AI
+ * 3. analyzing   – AI is identifying items
+ * 4. review      – AI suggestion presented as an editable draft. The user
+ *                  freely adds, edits, removes or refines items, then
+ *                  explicitly confirms before anything is saved.
+ *
+ * Everything in `review` is a draft. Nothing is persisted to Supabase until
+ * the user taps "Confirmar refeição".
+ */
 export function PhotoAnalyzer() {
   const router = useRouter();
   const cameraRef = React.useRef<HTMLInputElement>(null);
@@ -36,8 +55,10 @@ export function PhotoAnalyzer() {
   const [result, setResult] = React.useState<PhotoAnalysisResult | null>(null);
   const [foods, setFoods] = React.useState<AIDetectedFood[]>([]);
   const [mealType, setMealType] = React.useState<MealType>(guessMealType());
+  const [mealName, setMealName] = React.useState("");
   const [date] = React.useState(toDateKey());
   const [saving, setSaving] = React.useState(false);
+  const [analyzeError, setAnalyzeError] = React.useState<string | null>(null);
 
   async function onPick(file: File | null | undefined) {
     if (!file) return;
@@ -53,6 +74,7 @@ export function PhotoAnalyzer() {
   async function analyze() {
     if (!imageData) return;
     setStep("analyzing");
+    setAnalyzeError(null);
     try {
       const res = await fetch("/api/ai/analyze-photo", {
         method: "POST",
@@ -60,7 +82,9 @@ export function PhotoAnalyzer() {
         body: JSON.stringify({ image: imageData }),
       });
       if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
+        const j = (await res.json().catch(() => ({}))) as {
+          message?: string;
+        };
         throw new Error(j.message || "Falha na análise");
       }
       const json: PhotoAnalysisResult = await res.json();
@@ -68,9 +92,9 @@ export function PhotoAnalyzer() {
       setFoods(json.foods);
       setStep("review");
     } catch (err) {
-      toast.error("Não foi possível analisar", {
-        description: (err as Error).message,
-      });
+      const msg = (err as Error).message || "Falha na análise";
+      setAnalyzeError(msg);
+      toast.error("Não foi possível analisar", { description: msg });
       setStep("preview");
     }
   }
@@ -79,18 +103,46 @@ export function PhotoAnalyzer() {
     setImageData(null);
     setResult(null);
     setFoods([]);
+    setMealName("");
+    setAnalyzeError(null);
     setStep("capture");
   }
 
+  function addManualItem() {
+    setFoods((arr) => [
+      ...arr,
+      {
+        name: "",
+        estimated_quantity: "",
+        calories: 0,
+        protein: 0,
+        carbs: 0,
+        fat: 0,
+      },
+    ]);
+  }
+
   async function save() {
-    if (!result) return;
+    const cleaned = foods
+      .map((f) => ({
+        ...f,
+        name: f.name.trim(),
+        estimated_quantity: (f.estimated_quantity ?? "").trim(),
+      }))
+      .filter((f) => f.name.length > 0);
+
+    if (cleaned.length === 0) {
+      toast.error("Adicione pelo menos um item antes de confirmar.");
+      return;
+    }
+
     setSaving(true);
-    const totals = foods.reduce(
+    const totals = cleaned.reduce(
       (acc, f) => ({
-        calories: acc.calories + f.calories,
-        protein: acc.protein + f.protein,
-        carbs: acc.carbs + f.carbs,
-        fat: acc.fat + f.fat,
+        calories: acc.calories + (Number(f.calories) || 0),
+        protein: acc.protein + (Number(f.protein) || 0),
+        carbs: acc.carbs + (Number(f.carbs) || 0),
+        fat: acc.fat + (Number(f.fat) || 0),
       }),
       { calories: 0, protein: 0, carbs: 0, fat: 0 },
     );
@@ -98,13 +150,14 @@ export function PhotoAnalyzer() {
       await applyPhotoAnalysis({
         date,
         meal_type: mealType,
-        detected_foods: foods,
+        meal_name: mealName.trim() || undefined,
+        detected_foods: cleaned,
         total_calories: totals.calories,
         total_protein: totals.protein,
         total_carbs: totals.carbs,
         total_fat: totals.fat,
-        confidence: result.confidence,
-        summary: result.summary,
+        confidence: result?.confidence ?? 0,
+        summary: result?.summary,
       });
       toast.success("Refeição salva");
       router.push("/dashboard");
@@ -118,16 +171,18 @@ export function PhotoAnalyzer() {
   // ============ Render by step ============
   if (step === "capture") {
     return (
-      <div className="space-y-5">
-        <Card className="overflow-hidden border-dashed border-2">
+      <div className="space-y-5 animate-fade-in">
+        <FlowStepper step={step} />
+
+        <Card className="overflow-hidden border-2 border-dashed bg-gradient-to-br from-secondary/40 to-card">
           <div className="flex aspect-[4/3] flex-col items-center justify-center gap-3 p-6 text-center">
-            <span className="grid h-16 w-16 place-items-center rounded-2xl bg-primary/10 text-primary">
+            <span className="grid h-16 w-16 place-items-center rounded-2xl bg-primary/10 text-primary shadow-inner">
               <Camera className="h-7 w-7" />
             </span>
             <div>
               <p className="font-display font-semibold">Adicione uma foto</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                A IA identifica os alimentos e estima calorias e macros.
+                A IA identifica os alimentos. Você revisa antes de salvar.
               </p>
             </div>
           </div>
@@ -167,10 +222,11 @@ export function PhotoAnalyzer() {
         />
 
         <Card className="bg-secondary/40 p-4">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             <strong className="text-foreground">Dica:</strong> capture a refeição
-            de cima e com boa iluminação. Você revisa e edita antes de salvar —
-            nada é gravado automaticamente.
+            de cima e com boa iluminação. A análise é apenas uma sugestão —
+            você pode adicionar, editar ou remover itens livremente antes de
+            salvar.
           </p>
         </Card>
       </div>
@@ -180,6 +236,8 @@ export function PhotoAnalyzer() {
   if (step === "preview" || step === "analyzing") {
     return (
       <div className="space-y-5 animate-fade-in">
+        <FlowStepper step={step} />
+
         <Card className="overflow-hidden">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -198,9 +256,17 @@ export function PhotoAnalyzer() {
             <Skeleton className="h-4 w-full" />
             <Skeleton className="h-4 w-4/5" />
             <Skeleton className="h-4 w-3/5" />
+            <p className="pt-1 text-xs text-muted-foreground">
+              Isso costuma levar alguns segundos.
+            </p>
           </Card>
         ) : (
           <div className="space-y-3">
+            {analyzeError && (
+              <Card className="border-warning/30 bg-warning/5 p-4 text-sm">
+                <p className="text-warning-foreground/80">{analyzeError}</p>
+              </Card>
+            )}
             <Button size="xl" className="w-full" onClick={analyze}>
               <Sparkles /> Analisar refeição
             </Button>
@@ -218,13 +284,13 @@ export function PhotoAnalyzer() {
     );
   }
 
-  // review step
+  // ============ review step ============
   const totals = foods.reduce(
     (acc, f) => ({
-      calories: acc.calories + f.calories,
-      protein: acc.protein + f.protein,
-      carbs: acc.carbs + f.carbs,
-      fat: acc.fat + f.fat,
+      calories: acc.calories + (Number(f.calories) || 0),
+      protein: acc.protein + (Number(f.protein) || 0),
+      carbs: acc.carbs + (Number(f.carbs) || 0),
+      fat: acc.fat + (Number(f.fat) || 0),
     }),
     { calories: 0, protein: 0, carbs: 0, fat: 0 },
   );
@@ -235,6 +301,8 @@ export function PhotoAnalyzer() {
 
   return (
     <div className="space-y-5 animate-fade-in">
+      <FlowStepper step={step} />
+
       {imageData && (
         <Card className="relative overflow-hidden">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -248,11 +316,19 @@ export function PhotoAnalyzer() {
               <Sparkles className="mr-1 h-3 w-3" /> Confiança {confLabel}
             </Badge>
           </div>
+          <div className="absolute left-3 bottom-3">
+            <Badge variant="secondary" className="backdrop-blur">
+              <Pencil className="mr-1 h-3 w-3" /> Sugestão editável
+            </Badge>
+          </div>
         </Card>
       )}
 
       {result?.summary && (
         <Card className="border-accent/30 bg-accent/10 p-4">
+          <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            <Sparkles className="h-3 w-3" /> Resumo da IA
+          </div>
           <p className="text-sm leading-relaxed">{result.summary}</p>
         </Card>
       )}
@@ -262,15 +338,37 @@ export function PhotoAnalyzer() {
         <MealTypePicker value={mealType} onChange={setMealType} />
       </div>
 
+      <div className="space-y-1.5">
+        <Label htmlFor="meal-name">Nome (opcional)</Label>
+        <Input
+          id="meal-name"
+          value={mealName}
+          onChange={(e) => setMealName(e.target.value)}
+          placeholder="Ex: Almoço pós-treino"
+          className="h-11"
+        />
+      </div>
+
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <Label>Itens detectados</Label>
-          <Badge variant="secondary">{foods.length}</Badge>
+          <Label>Itens da refeição</Label>
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary">{foods.length}</Badge>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={addManualItem}
+              className="text-primary"
+            >
+              <Plus className="h-4 w-4" /> Adicionar
+            </Button>
+          </div>
         </div>
         <div className="space-y-2">
           {foods.map((f, idx) => (
             <DetectedFoodEditor
-              key={idx}
+              key={`${idx}-${f.name}`}
               food={f}
               onChange={(v) =>
                 setFoods((arr) => {
@@ -285,8 +383,19 @@ export function PhotoAnalyzer() {
             />
           ))}
           {foods.length === 0 && (
-            <Card className="p-4 text-sm text-muted-foreground">
-              Nenhum item detectado. Tente tirar uma foto mais clara.
+            <Card className="space-y-3 p-4 text-center">
+              <p className="text-sm text-muted-foreground">
+                Nenhum item ainda. Adicione manualmente ou volte e tente outra
+                foto.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={addManualItem}
+              >
+                <Plus className="h-4 w-4" /> Adicionar item
+              </Button>
             </Card>
           )}
         </div>
@@ -307,7 +416,13 @@ export function PhotoAnalyzer() {
             </div>
           </div>
           <div className="flex gap-2">
-            <Button type="button" variant="ghost" size="lg" onClick={reset}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="lg"
+              onClick={reset}
+              aria-label="Trocar foto"
+            >
               <RotateCcw />
             </Button>
             <Button
@@ -317,7 +432,7 @@ export function PhotoAnalyzer() {
               onClick={save}
               disabled={foods.length === 0}
             >
-              <Save /> Salvar
+              <ShieldCheck /> Confirmar
             </Button>
           </div>
         </Card>
@@ -326,29 +441,157 @@ export function PhotoAnalyzer() {
   );
 }
 
+/* ====================================================================== */
+/* Sub-components                                                          */
+/* ====================================================================== */
+
+const STEP_LABELS: { id: Step; label: string }[] = [
+  { id: "capture", label: "Foto" },
+  { id: "preview", label: "Análise" },
+  { id: "review", label: "Revisar" },
+];
+
+function FlowStepper({ step }: { step: Step }) {
+  const order = ["capture", "preview", "review"] as const;
+  const stepKey: (typeof order)[number] =
+    step === "analyzing" ? "preview" : step;
+  const currentIdx = order.indexOf(stepKey);
+  return (
+    <ol className="flex items-center gap-2" aria-label="Etapas">
+      {STEP_LABELS.map((s, i) => {
+        const done = i < currentIdx;
+        const active = i === currentIdx;
+        return (
+          <li key={s.id} className="flex flex-1 items-center gap-2">
+            <div className="flex flex-1 items-center gap-2">
+              <span
+                className={cn(
+                  "grid h-6 w-6 shrink-0 place-items-center rounded-full border text-[10px] font-bold transition-colors",
+                  done && "border-primary bg-primary text-primary-foreground",
+                  active &&
+                    "border-primary bg-primary/15 text-primary",
+                  !done && !active && "border-border bg-card text-muted-foreground",
+                )}
+              >
+                {done ? <Check className="h-3 w-3" /> : i + 1}
+              </span>
+              <span
+                className={cn(
+                  "truncate text-[11px] font-semibold uppercase tracking-wider",
+                  active ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {s.label}
+              </span>
+            </div>
+            {i < STEP_LABELS.length - 1 && (
+              <span
+                className={cn(
+                  "h-px flex-1 transition-colors",
+                  done ? "bg-primary/60" : "bg-border",
+                )}
+              />
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+interface DetectedFoodEditorProps {
+  food: AIDetectedFood;
+  onChange: (f: AIDetectedFood) => void;
+  onRemove: () => void;
+}
+
 function DetectedFoodEditor({
   food,
   onChange,
   onRemove,
-}: {
-  food: AIDetectedFood;
-  onChange: (f: AIDetectedFood) => void;
-  onRemove: () => void;
-}) {
-  const [editing, setEditing] = React.useState(false);
+}: DetectedFoodEditorProps) {
+  // New empty rows open expanded; previously-edited rows show collapsed.
+  const [editing, setEditing] = React.useState(food.name.trim().length === 0);
+  const [refining, setRefining] = React.useState(false);
+
+  const set = <K extends keyof AIDetectedFood>(k: K, v: AIDetectedFood[K]) =>
+    onChange({ ...food, [k]: v });
+
+  /**
+   * Ask the AI to re-estimate just THIS item from its current name +
+   * quantity. We hit the existing /api/ai/estimate-food endpoint and adapt
+   * EstimatedFood -> AIDetectedFood. The full image is NOT re-analyzed.
+   */
+  async function refine() {
+    const query = [food.estimated_quantity, food.name]
+      .map((s) => (s ?? "").trim())
+      .filter(Boolean)
+      .join(" ");
+    if (query.length < 3) {
+      toast.error("Descreva melhor o item antes de refinar.");
+      return;
+    }
+    setRefining(true);
+    try {
+      const res = await fetch("/api/ai/estimate-food", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { message?: string };
+        throw new Error(j.message || "Falha ao refinar");
+      }
+      const json: { foods?: EstimatedFood[] } = await res.json();
+      const foods = Array.isArray(json.foods) ? json.foods : [];
+      if (foods.length === 0) {
+        toast.error("IA não retornou estimativa", {
+          description: "Tente um nome ou quantidade mais específica.",
+        });
+        return;
+      }
+      const first = foods[0];
+      onChange({
+        name: first.name || food.name,
+        estimated_quantity: first.quantity || food.estimated_quantity,
+        calories: first.calories || 0,
+        protein: first.protein_g || 0,
+        carbs: first.carbs_g || 0,
+        fat: first.fat_g || 0,
+      });
+      toast.success("Item atualizado pela IA");
+    } catch (err) {
+      toast.error("Não foi possível refinar", {
+        description: (err as Error).message,
+      });
+    } finally {
+      setRefining(false);
+    }
+  }
+
   if (!editing) {
     return (
-      <Card className="flex items-center gap-3 p-3">
-        <div className="min-w-0 flex-1">
-          <div className="font-medium leading-tight">{food.name}</div>
-          <div className="text-xs text-muted-foreground">
-            {food.estimated_quantity} · P{Math.round(food.protein)} C
-            {Math.round(food.carbs)} G{Math.round(food.fat)}
+      <Card className="flex items-center gap-3 p-3 transition-colors hover:bg-secondary/30">
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-medium leading-tight">
+              {food.name || (
+                <span className="text-muted-foreground">Sem nome</span>
+              )}
+            </div>
+            <div className="truncate text-xs text-muted-foreground">
+              {food.estimated_quantity || "—"} · P{Math.round(food.protein)} C
+              {Math.round(food.carbs)} G{Math.round(food.fat)}
+            </div>
           </div>
-        </div>
-        <div className="stat-number text-sm">
-          {formatKcal(food.calories)}
-        </div>
+          <div className="stat-number shrink-0 text-sm">
+            {formatKcal(food.calories)}
+          </div>
+        </button>
         <Button
           size="icon-sm"
           variant="ghost"
@@ -360,14 +603,14 @@ function DetectedFoodEditor({
       </Card>
     );
   }
-  const set = <K extends keyof AIDetectedFood>(k: K, v: AIDetectedFood[K]) =>
-    onChange({ ...food, [k]: v });
+
   return (
-    <Card className="space-y-2 p-3">
+    <Card className="space-y-2 border-primary/30 bg-card p-3 shadow-md shadow-primary/5">
       <div className="flex items-center gap-2">
         <Input
           value={food.name}
           onChange={(e) => set("name", e.target.value)}
+          placeholder="Nome do alimento"
           className="h-10 flex-1"
         />
         <Input
@@ -399,13 +642,37 @@ function DetectedFoodEditor({
           onChange={(v) => set("fat", v)}
         />
       </div>
-      <div className="flex justify-end gap-2 pt-1">
-        <Button size="sm" variant="ghost" onClick={onRemove}>
-          Remover
+      <div className="flex items-center justify-between gap-2 pt-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={refine}
+          disabled={refining || !food.name.trim()}
+          className="text-primary"
+        >
+          <Wand2 className={cn("h-4 w-4", refining && "animate-spin")} />
+          {refining ? "Refinando..." : "Refinar com IA"}
         </Button>
-        <Button size="sm" onClick={() => setEditing(false)}>
-          Pronto
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={onRemove}
+            aria-label="Remover item"
+          >
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => setEditing(false)}
+            disabled={!food.name.trim()}
+          >
+            <Check className="h-4 w-4" /> Pronto
+          </Button>
+        </div>
       </div>
     </Card>
   );
@@ -420,6 +687,14 @@ function NumField({
   value: number;
   onChange: (v: number) => void;
 }) {
+  // Render an empty string while focused-empty so users can clear without
+  // showing a "0". Always emits numbers to the parent.
+  const [text, setText] = React.useState(
+    Number.isFinite(value) && value !== 0 ? String(value) : "",
+  );
+  React.useEffect(() => {
+    setText(Number.isFinite(value) && value !== 0 ? String(value) : "");
+  }, [value]);
   return (
     <label className="flex flex-col gap-1">
       <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -428,8 +703,13 @@ function NumField({
       <Input
         type="number"
         inputMode="decimal"
-        value={Number.isFinite(value) ? value : 0}
-        onChange={(e) => onChange(Number(e.target.value))}
+        value={text}
+        onChange={(e) => {
+          const raw = e.target.value;
+          setText(raw);
+          const n = parseFloat(raw);
+          onChange(Number.isFinite(n) ? n : 0);
+        }}
         className="h-10 text-center text-sm"
       />
     </label>

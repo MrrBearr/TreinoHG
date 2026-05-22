@@ -40,9 +40,15 @@ export function BottomNav() {
                 )}
               >
                 {active && (
-                  <span className="absolute -top-px h-1 w-8 rounded-full bg-primary" />
+                  <span className="absolute -top-px h-1 w-8 rounded-full bg-primary animate-scale-in" />
                 )}
-                <Icon className="h-5 w-5" strokeWidth={active ? 2.4 : 2} />
+                <Icon
+                  className={cn(
+                    "h-5 w-5 transition-transform",
+                    active ? "scale-110" : "",
+                  )}
+                  strokeWidth={active ? 2.4 : 2}
+                />
                 <span>{tab.label}</span>
               </Link>
             </li>

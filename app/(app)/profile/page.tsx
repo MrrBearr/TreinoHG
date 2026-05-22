@@ -5,6 +5,7 @@ import { Header } from "@/components/layout/Header";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { ProfileForm } from "@/components/profile/ProfileForm";
 import { ThemeSelector } from "@/components/profile/ThemeSelector";
+import { CoachPersonalitySelector } from "@/components/profile/CoachPersonalitySelector";
 import { LogoutButton } from "@/components/profile/LogoutButton";
 import { Card } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -32,7 +33,7 @@ export default async function ProfilePage() {
   return (
     <PageContainer>
       <Header title="Perfil" subtitle="Seus dados e preferências" />
-      <div className="space-y-5 animate-fade-in">
+      <div className="space-y-5 animate-fade-in stagger">
         <Card className="flex items-center gap-4 p-5">
           <Avatar className="h-14 w-14">
             <AvatarFallback className="bg-primary text-primary-foreground font-display text-lg">
@@ -59,6 +60,8 @@ export default async function ProfilePage() {
         )}
 
         <ThemeSelector current={profile?.theme ?? "dark"} />
+
+        <CoachPersonalitySelector current={profile?.coach_personality ?? null} />
 
         <ProfileForm profile={profile} />
 

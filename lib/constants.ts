@@ -14,25 +14,32 @@ export const MEAL_TYPES = [
 export type MealType = (typeof MEAL_TYPES)[number]["value"];
 
 export const WORKOUT_TYPES = [
-  { value: "legs", label: "Pernas", met: 6.0 },
-  { value: "chest", label: "Peito", met: 5.5 },
-  { value: "back", label: "Costas", met: 5.5 },
-  { value: "shoulders", label: "Ombros", met: 5.0 },
-  { value: "arms", label: "Braços", met: 5.0 },
-  { value: "abs", label: "Abdômen", met: 5.0 },
-  { value: "fullbody", label: "Full Body", met: 6.5 },
-  { value: "cardio", label: "Cardio", met: 8.0 },
-  { value: "running", label: "Corrida", met: 9.8 },
-  { value: "walking", label: "Caminhada", met: 3.8 },
-  { value: "treadmill", label: "Esteira", met: 7.0 },
-  { value: "free", label: "Treino livre", met: 5.0 },
+  // Strength splits — vigorous resistance training averaged with rest periods.
+  // Compendium of Physical Activities: 3.5–6.0 MET depending on effort.
+  // We use 4.5 as a realistic moderate baseline; intensity multipliers move it.
+  { value: "legs", label: "Pernas", met: 5.0 },
+  { value: "chest", label: "Peito", met: 4.5 },
+  { value: "back", label: "Costas", met: 4.5 },
+  { value: "shoulders", label: "Ombros", met: 4.0 },
+  { value: "arms", label: "Braços", met: 3.8 },
+  { value: "abs", label: "Abdômen", met: 4.0 },
+  // Compound full-body sessions burn slightly more than isolated splits.
+  { value: "fullbody", label: "Full Body", met: 5.5 },
+  // Cardio family — moderate steady-state defaults.
+  { value: "cardio", label: "Cardio", met: 6.5 },
+  { value: "running", label: "Corrida", met: 9.0 },
+  { value: "walking", label: "Caminhada", met: 3.5 },
+  { value: "treadmill", label: "Esteira", met: 6.0 },
+  { value: "free", label: "Treino livre", met: 4.5 },
   { value: "rest", label: "Descanso", met: 1.0 },
 ] as const;
 
 export type WorkoutType = (typeof WORKOUT_TYPES)[number]["value"];
 
 export const INTENSITY_LEVELS = [
-  { value: "low", label: "Leve", multiplier: 0.85 },
+  // Conservative multipliers. We anchor "moderate" at 1.0 so the per-type
+  // MET tables read as the realistic baseline.
+  { value: "low", label: "Leve", multiplier: 0.8 },
   { value: "moderate", label: "Moderado", multiplier: 1.0 },
   { value: "high", label: "Intenso", multiplier: 1.15 },
   { value: "extreme", label: "Extremo", multiplier: 1.3 },
@@ -70,3 +77,12 @@ export const THEME_OPTIONS = [
   { value: "dark", label: "Escuro" },
   { value: "premium", label: "Premium" },
 ] as const;
+
+
+// Re-export coach personality catalog so legacy imports keep working.
+// Source of truth lives in `lib/coach/personalities.ts`.
+export {
+  COACH_PERSONALITIES,
+  DEFAULT_COACH_PERSONALITY,
+  type CoachPersonalityId,
+} from "./coach/personalities";
