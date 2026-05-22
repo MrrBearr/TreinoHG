@@ -13,6 +13,11 @@ import type {
   Sex,
   WorkoutType,
 } from "@/lib/constants";
+import {
+  COACH_PERSONALITIES,
+  DEFAULT_COACH_PERSONALITY,
+  type CoachPersonalityId,
+} from "@/lib/coach/personalities";
 import type { AIDetectedFood } from "@/types/database";
 
 async function ensureUser() {
@@ -64,6 +69,7 @@ export async function updateProfile(formData: FormData) {
     dietary_restrictions: get("dietary_restrictions") || null,
     preferred_workout_time: get("preferred_workout_time") || null,
     water_target_ml: num("water_target_ml"),
+    coach_personality: validCoachPersonality(get("coach_personality")),
     onboarded: true,
     updated_at: new Date().toISOString(),
   };
@@ -114,6 +120,26 @@ export async function updateTheme(theme: "light" | "dark" | "premium") {
   const { supabase, user } = await ensureUser();
   await supabase.from("profiles").update({ theme }).eq("user_id", user.id);
   revalidatePath("/", "layout");
+}
+
+/** Persist the user's chosen coach personality. */
+export async function updateCoachPersonality(personality: string) {
+  const { supabase, user } = await ensureUser();
+  const value = validCoachPersonality(personality);
+  await supabase
+    .from("profiles")
+    .update({ coach_personality: value })
+    .eq("user_id", user.id);
+  revalidatePath("/profile");
+  revalidatePath("/insights");
+  revalidatePath("/dashboard");
+}
+
+function validCoachPersonality(v: string | null | undefined): CoachPersonalityId {
+  const allowed = new Set(COACH_PERSONALITIES.map((p) => p.value));
+  return allowed.has(v as CoachPersonalityId)
+    ? (v as CoachPersonalityId)
+    : DEFAULT_COACH_PERSONALITY;
 }
 
 // ====================== MEALS ======================

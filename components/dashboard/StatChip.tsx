@@ -28,7 +28,7 @@ export function StatChip({
   return (
     <div
       className={cn(
-        "flex items-center gap-3 rounded-2xl bg-card p-3 shadow-sm border border-border",
+        "press flex items-center gap-3 rounded-2xl bg-card p-3 shadow-soft border border-border transition-all hover:border-border/80",
         className,
       )}
     >

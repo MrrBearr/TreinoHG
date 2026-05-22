@@ -42,7 +42,16 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await analyzeMealPhoto(body.image);
+    // Load coach personality so the summary respects the user's chosen tone.
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("coach_personality")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    const result = await analyzeMealPhoto(body.image, {
+      personality: profile?.coach_personality ?? null,
+    });
 
     // analyzeMealPhoto never throws; it returns a fallback shape when the
     // provider was unavailable or the response was malformed. Surface that

@@ -31,7 +31,7 @@ export default async function InsightsPage() {
     <PageContainer>
       <Header title="Coach IA" subtitle="Insights e orientação personalizada" />
 
-      <div className="space-y-5 animate-fade-in">
+      <div className="space-y-5 animate-fade-in stagger">
         <Card className="relative overflow-hidden border-accent/30 bg-gradient-to-br from-accent/15 via-card to-card p-5">
           <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-accent/20 blur-2xl" />
           <div className="relative flex items-start gap-3">

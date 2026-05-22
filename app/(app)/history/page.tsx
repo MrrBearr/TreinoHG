@@ -25,7 +25,7 @@ export default async function HistoryPage() {
         title="Histórico"
         subtitle="Seus últimos 30 dias"
       />
-      <div className="space-y-5 animate-fade-in">
+      <div className="space-y-5 animate-fade-in stagger">
         <div className="grid grid-cols-3 gap-2">
           <Card className="p-3">
             <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">

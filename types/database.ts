@@ -27,6 +27,7 @@ export interface Profile {
   food_preferences: string | null;
   dietary_restrictions: string | null;
   theme: "light" | "dark" | "premium" | null;
+  coach_personality: string | null;
   onboarded: boolean;
   created_at: string;
   updated_at: string;

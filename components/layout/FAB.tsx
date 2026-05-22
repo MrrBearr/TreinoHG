@@ -68,7 +68,7 @@ export function FAB() {
             aria-label={open ? "Fechar ações" : "Abrir ações"}
             onClick={() => setOpen((v) => !v)}
             className={cn(
-              "grid h-14 w-14 place-items-center rounded-full bg-primary text-primary-foreground shadow-xl shadow-primary/40 transition-transform active:scale-95",
+              "grid h-14 w-14 place-items-center rounded-full bg-primary text-primary-foreground shadow-xl shadow-primary/40 transition-all duration-200 active:scale-95 hover:shadow-primary/60",
               open && "rotate-45",
             )}
           >

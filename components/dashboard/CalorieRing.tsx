@@ -47,6 +47,7 @@ export function CalorieRing({
           stroke="hsl(var(--secondary))"
           strokeWidth={stroke}
           fill="none"
+          opacity="0.6"
         />
         <circle
           cx="110"
@@ -57,7 +58,8 @@ export function CalorieRing({
           fill="none"
           strokeDasharray={`${dash} ${circ}`}
           strokeLinecap="round"
-          className="transition-all duration-700 ease-out"
+          className="transition-all duration-1000 ease-out"
+          style={{ filter: "drop-shadow(0 0 8px hsl(var(--primary) / 0.18))" }}
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center text-center">

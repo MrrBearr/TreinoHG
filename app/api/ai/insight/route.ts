@@ -42,21 +42,28 @@ export async function GET(req: Request) {
     );
   }
 
-  // Cache: reuse insights generated within the last 2 hours for the same day.
+  // Cache: reuse insights generated within the last 2 hours for the same day
+  // AND for the same coach personality. When the user changes personality the
+  // tone should update on next refresh, not after the 2h window.
   const twoHoursAgo = new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString();
+  const personalityKey = profile.coach_personality ?? "motivator";
   const { data: cached } = await supabase
     .from("ai_messages")
-    .select("content")
+    .select("content, context")
     .eq("user_id", user.id)
     .eq("date", date)
     .eq("kind", "insight")
     .gte("created_at", twoHoursAgo)
     .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(5);
 
-  if (cached?.content) {
-    return NextResponse.json({ insight: cached.content, cached: true });
+  const reusable = (cached ?? []).find((row) => {
+    const ctx = (row.context as { coach_personality?: string } | null) ?? null;
+    return (ctx?.coach_personality ?? "motivator") === personalityKey;
+  });
+
+  if (reusable?.content) {
+    return NextResponse.json({ insight: reusable.content, cached: true });
   }
 
   try {
@@ -68,6 +75,7 @@ export async function GET(req: Request) {
         carbs_target_g: profile.carbs_target_g,
         fat_target_g: profile.fat_target_g,
         weight_kg: profile.weight_kg,
+        coach_personality: profile.coach_personality,
       },
       summary,
     });
@@ -90,7 +98,10 @@ export async function GET(req: Request) {
       date,
       kind: "insight",
       content: result.content,
-      context: summary as unknown as object,
+      context: {
+        ...summary,
+        coach_personality: personalityKey,
+      } as unknown as object,
     });
 
     return NextResponse.json({ insight: result.content, cached: false });

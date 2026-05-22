@@ -30,10 +30,16 @@ create table if not exists public.profiles (
   food_preferences    text,
   dietary_restrictions text,
   theme         text check (theme in ('light','dark','premium')) default 'dark',
+  coach_personality text default 'motivator',
   onboarded     boolean not null default false,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
+
+-- Idempotent: ensure coach_personality exists on databases created before
+-- this column was introduced.
+alter table public.profiles
+  add column if not exists coach_personality text default 'motivator';
 
 -- =========================================================================
 -- days: one row per user per calendar day

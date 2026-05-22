@@ -213,19 +213,29 @@ export function AddWorkoutForm({
               <Flame className="h-5 w-5" />
             </span>
             <div className="min-w-0 flex-1">
-              <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                Calorias estimadas
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                  Calorias estimadas
+                </span>
+                <span className="rounded-full bg-secondary px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  estimativa
+                </span>
               </div>
               <div className="stat-number text-2xl">
                 {formatKcal(estimated)}
               </div>
-              <div className="text-[11px] text-muted-foreground">
+              <div className="text-[11px] leading-relaxed text-muted-foreground">
                 Baseado em {weight} kg, MET do exercício e intensidade.
+                Treinos de força contam o tempo ativo (com descansos
+                descontados) para ficar realista.
               </div>
             </div>
           </div>
           <div className="mt-3 space-y-1.5">
-            <Label htmlFor="manual-kcal">Ajustar manualmente (opcional)</Label>
+            <Label htmlFor="manual-kcal" className="flex items-center gap-1">
+              Ajustar manualmente
+              <span className="text-muted-foreground">(opcional)</span>
+            </Label>
             <Input
               id="manual-kcal"
               type="number"
@@ -239,6 +249,10 @@ export function AddWorkoutForm({
               }
               className="h-11"
             />
+            <p className="text-[11px] text-muted-foreground">
+              Se o número parecer alto ou baixo, escreva o valor que você
+              considera realista. O app vai usar o seu valor.
+            </p>
           </div>
         </Card>
       )}

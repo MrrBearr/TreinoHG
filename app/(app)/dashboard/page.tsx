@@ -60,10 +60,10 @@ export default async function DashboardPage() {
         subtitle={today.charAt(0).toUpperCase() + today.slice(1)}
       />
 
-      <div className="space-y-5 animate-fade-in">
+      <div className="space-y-5 animate-fade-in stagger">
         {!profile?.onboarded && <OnboardingPrompt />}
 
-        <section className="rounded-3xl border border-border bg-card p-5 shadow-lg shadow-black/5">
+        <section className="rounded-3xl border border-border bg-card p-5 shadow-soft-lg">
           <CalorieRing
             consumed={summary.consumed_kcal}
             burned={summary.burned_kcal}
